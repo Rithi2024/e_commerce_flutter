@@ -1,0 +1,68 @@
+# ---------- OS / Logs ----------
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+.tmp_*.md
+*.swp
+
+# ---------- IDE ----------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# ---------- Flutter / Dart ----------
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+.pub-cache/
+build/
+coverage/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+
+# ---------- Android ----------
+android/.gradle/
+android/local.properties
+android/key.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
+*.jks
+*.keystore
+
+# ---------- iOS / macOS ----------
+ios/Flutter/ephemeral/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/.symlinks/
+ios/Pods/
+ios/Runner.xcworkspace/
+macos/Flutter/ephemeral/
+macos/Pods/
+
+# ---------- Linux / Windows ----------
+linux/flutter/ephemeral/
+windows/flutter/ephemeral/
+
+# ---------- Web ----------
+web/.dart_tool/
+
+# ---------- Supabase local ----------
+supabase/.temp/
+
+# ---------- Secrets ----------
+.env
+.env.*
+!.env.example
+/lib/config/app_constants.dart
+*.p12
+*.pem
+*.key
+*.mobileprovision
