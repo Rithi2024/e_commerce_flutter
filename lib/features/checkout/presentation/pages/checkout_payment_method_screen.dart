@@ -29,7 +29,8 @@ class _CheckoutPaymentMethodScreenState
   }
 
   Widget _methodTile({
-    required IconData icon,
+    IconData? icon,
+    String? iconAssetPath,
     required Color iconColor,
     required String title,
     String subtitle = '',
@@ -37,54 +38,84 @@ class _CheckoutPaymentMethodScreenState
     required bool enabled,
     required bool selected,
   }) {
-    return Opacity(
-      opacity: enabled ? 1 : 0.55,
-      child: InkWell(
-        onTap: enabled ? () => setState(() => _selectedMethod = value) : null,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-          child: Row(
-            children: [
-              Container(
-                width: 54,
-                height: 54,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  color: iconColor.withValues(alpha: 0.12),
+    assert(icon != null || iconAssetPath != null);
+    final hasAssetIcon = iconAssetPath != null;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: selected ? _accent.withValues(alpha: 0.08) : Colors.white,
+        border: Border.all(
+          color: selected ? _accent : const Color(0xFFE8E8EC),
+          width: selected ? 1.4 : 1,
+        ),
+      ),
+      child: Opacity(
+        opacity: enabled ? 1 : 0.55,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: enabled ? () => setState(() => _selectedMethod = value) : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 54,
+                  height: 54,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: hasAssetIcon
+                        ? null
+                        : iconColor.withValues(alpha: 0.12),
+                  ),
+                  child: hasAssetIcon
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.asset(iconAssetPath, fit: BoxFit.cover),
+                        )
+                      : Icon(icon, color: iconColor, size: 30),
                 ),
-                child: Icon(icon, color: iconColor, size: 30),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    if (subtitle.trim().isNotEmpty) ...[
-                      const SizedBox(height: 4),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        subtitle,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.grey.shade500,
+                        title,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
+                      if (subtitle.trim().isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-              Icon(
-                selected ? Icons.radio_button_checked : Icons.radio_button_off,
-                size: 32,
-                color: selected ? _accent : Colors.grey.shade500,
-              ),
-            ],
+                AnimatedScale(
+                  scale: selected ? 1 : 0.94,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  child: Icon(
+                    selected
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off,
+                    size: 32,
+                    color: selected ? _accent : Colors.grey.shade500,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -142,69 +173,15 @@ class _CheckoutPaymentMethodScreenState
                   child: Column(
                     children: [
                       _methodTile(
-                        icon: Icons.qr_code_2_rounded,
+                        iconAssetPath: 'assets/brand/aba_pay_logo.png',
                         iconColor: const Color(0xFF0B7D69),
                         title: 'ABA PAY',
                         subtitle: 'Tap to pay with ABA KHQR',
-                        value: 'aba_payway_qr',
+                        value: AppSettingsProvider.paymentAbaPayWayQr,
                         enabled: abaEnabled,
-                        selected: selectedMethod == 'aba_payway_qr',
-                      ),
-                      const Divider(height: 1),
-                      _methodTile(
-                        icon: Icons.chat_bubble_rounded,
-                        iconColor: const Color(0xFF22C55E),
-                        title: 'Wechat Pay',
-                        value: 'wechat',
-                        enabled: false,
-                        selected: selectedMethod == 'wechat',
-                      ),
-                      const Divider(height: 1),
-                      _methodTile(
-                        icon: Icons.account_balance_wallet_rounded,
-                        iconColor: const Color(0xFF0E7490),
-                        title: 'Wallet',
-                        subtitle: 'Tap to enable wallet',
-                        value: 'wallet',
-                        enabled: false,
-                        selected: selectedMethod == 'wallet',
-                      ),
-                      const Divider(height: 1),
-                      _methodTile(
-                        icon: Icons.account_balance_rounded,
-                        iconColor: const Color(0xFF84CC16),
-                        title: 'Wing Bank',
-                        value: 'wing',
-                        enabled: false,
-                        selected: selectedMethod == 'wing',
-                      ),
-                      const Divider(height: 1),
-                      _methodTile(
-                        icon: Icons.payments_outlined,
-                        iconColor: const Color(0xFF14B8A6),
-                        title: 'Lanton Pay',
-                        value: 'lanton',
-                        enabled: false,
-                        selected: selectedMethod == 'lanton',
-                      ),
-                      const Divider(height: 1),
-                      _methodTile(
-                        icon: Icons.currency_exchange,
-                        iconColor: const Color(0xFFE11D48),
-                        title: 'CoolCash',
-                        value: 'coolcash',
-                        enabled: false,
-                        selected: selectedMethod == 'coolcash',
-                      ),
-                      const Divider(height: 1),
-                      _methodTile(
-                        icon: Icons.account_balance_wallet_outlined,
-                        iconColor: const Color(0xFF1E3A8A),
-                        title: 'ACLEDA PAY',
-                        subtitle: 'Tap to pay with ACLEDA Mobile',
-                        value: 'acleda',
-                        enabled: false,
-                        selected: selectedMethod == 'acleda',
+                        selected:
+                            selectedMethod ==
+                            AppSettingsProvider.paymentAbaPayWayQr,
                       ),
                     ],
                   ),
@@ -233,9 +210,11 @@ class _CheckoutPaymentMethodScreenState
                         icon: Icons.local_shipping_outlined,
                         iconColor: const Color(0xFFFF8A00),
                         title: 'Cash On Delivery',
-                        value: 'cash_on_delivery',
+                        value: AppSettingsProvider.paymentCashOnDelivery,
                         enabled: cashOnDeliveryEnabled,
-                        selected: selectedMethod == 'cash_on_delivery',
+                        selected:
+                            selectedMethod ==
+                            AppSettingsProvider.paymentCashOnDelivery,
                       ),
                     ],
                   ),

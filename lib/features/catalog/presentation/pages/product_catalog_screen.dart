@@ -18,13 +18,17 @@ class ProductCatalogScreen extends StatefulWidget {
 }
 
 class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
+  static const double _loadMoreTriggerOffset = 420;
+
   Map<String, dynamic>? _activeEvent;
   Duration? _remainingEvent;
   Timer? _eventTicker;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_handleCatalogScroll);
     final productProvider = context.read<ProductCatalogProvider>();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
@@ -34,8 +38,21 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
 
   @override
   void dispose() {
+    _scrollController
+      ..removeListener(_handleCatalogScroll)
+      ..dispose();
     _eventTicker?.cancel();
     super.dispose();
+  }
+
+  void _handleCatalogScroll() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    if (position.maxScrollExtent <= 0) return;
+    final remaining = position.maxScrollExtent - position.pixels;
+    if (remaining <= _loadMoreTriggerOffset) {
+      context.read<ProductCatalogProvider>().loadMoreVisible();
+    }
   }
 
   DateTime? _parseEventExpiry(dynamic raw) {
@@ -252,13 +269,24 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                             child: ScrollConfiguration(
                               behavior: const _NoOverscrollScrollBehavior(),
                               child: CustomScrollView(
+                                controller: _scrollController,
                                 physics: const ClampingScrollPhysics(),
                                 slivers: [
                                   if (_activeEvent != null)
                                     SliverToBoxAdapter(
-                                      child: _HeroBanner(
-                                        event: _activeEvent!,
-                                        remaining: _remainingEvent,
+                                      child: AnimatedSwitcher(
+                                        duration: const Duration(
+                                          milliseconds: 320,
+                                        ),
+                                        switchInCurve: Curves.easeOutCubic,
+                                        switchOutCurve: Curves.easeInCubic,
+                                        child: _HeroBanner(
+                                          key: ValueKey<String>(
+                                            '${_activeEvent?['id'] ?? 'event'}:${_eventState(_activeEvent)}',
+                                          ),
+                                          event: _activeEvent!,
+                                          remaining: _remainingEvent,
+                                        ),
                                       ),
                                     ),
                                   if (prov.visible.isEmpty)
@@ -284,19 +312,42 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                                           i,
                                         ) {
                                           final p = prov.visible[i];
-                                          return _ProductCard(
-                                            product: p,
-                                            onTap: () => Navigator.push(
-                                              context,
-                                              MaterialPageRoute(
-                                                builder: (_) =>
-                                                    ProductDetailsScreen(
-                                                      product: p,
-                                                    ),
+                                          return _AnimatedGridItem(
+                                            key: ValueKey<String>(
+                                              'catalog-item-${p.id}',
+                                            ),
+                                            index: i,
+                                            child: _ProductCard(
+                                              product: p,
+                                              onTap: () => Navigator.push(
+                                                context,
+                                                MaterialPageRoute(
+                                                  builder: (_) =>
+                                                      ProductDetailsScreen(
+                                                        product: p,
+                                                      ),
+                                                ),
                                               ),
                                             ),
                                           );
                                         }, childCount: prov.visible.length),
+                                      ),
+                                    ),
+                                  if (prov.canLoadMore)
+                                    const SliverToBoxAdapter(
+                                      child: Padding(
+                                        padding: EdgeInsets.symmetric(
+                                          vertical: 10,
+                                        ),
+                                        child: Center(
+                                          child: SizedBox(
+                                            width: 24,
+                                            height: 24,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2.4,
+                                            ),
+                                          ),
+                                        ),
                                       ),
                                     ),
                                 ],
@@ -390,7 +441,7 @@ class _CategoryChips extends StatelessWidget {
           separatorBuilder: (context, index) => const SizedBox(width: 8),
           itemBuilder: (context, i) {
             final c = cats[i];
-            final active = prov.category == c;
+            final active = prov.isCategorySelected(c);
 
             return ChoiceChip(
               label: Text(c),
@@ -423,7 +474,7 @@ class _HeroBanner extends StatelessWidget {
   final Map<String, dynamic> event;
   final Duration? remaining;
 
-  const _HeroBanner({required this.event, required this.remaining});
+  const _HeroBanner({super.key, required this.event, required this.remaining});
 
   String _formatRemaining(Duration value) {
     final total = value.inSeconds;
@@ -607,6 +658,63 @@ class _HeroBanner extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _AnimatedGridItem extends StatefulWidget {
+  final int index;
+  final Widget child;
+
+  const _AnimatedGridItem({
+    super.key,
+    required this.index,
+    required this.child,
+  });
+
+  @override
+  State<_AnimatedGridItem> createState() => _AnimatedGridItemState();
+}
+
+class _AnimatedGridItemState extends State<_AnimatedGridItem>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 360),
+  );
+  late final Animation<double> _fadeAnimation = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOut,
+  );
+  late final Animation<Offset> _slideAnimation = Tween<Offset>(
+    begin: const Offset(0, 0.04),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+
+  @override
+  void initState() {
+    super.initState();
+    _startWithStagger();
+  }
+
+  Future<void> _startWithStagger() async {
+    final delayMs = 48 + ((widget.index % 10) * 24);
+    await Future<void>.delayed(Duration(milliseconds: delayMs));
+    if (!mounted) return;
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: SlideTransition(position: _slideAnimation, child: widget.child),
     );
   }
 }

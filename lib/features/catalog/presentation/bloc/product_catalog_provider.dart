@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ProductCatalogProvider extends ChangeNotifier {
+  static const int _initialVisibleCount = 30;
+  static const int _loadMoreCount = 30;
+
   final ProductUseCases _useCases;
   final LogUseCases? _logUseCases;
 
@@ -17,10 +20,13 @@ class ProductCatalogProvider extends ChangeNotifier {
        _logUseCases = logUseCases;
 
   List<Product> _all = <Product>[];
+  List<Product> _filtered = <Product>[];
   List<Product> visible = <Product>[];
   bool loading = false;
   String? error;
   List<Product> get all => List<Product>.unmodifiable(_all);
+  List<Product> get filtered => List<Product>.unmodifiable(_filtered);
+  bool get canLoadMore => visible.length < _filtered.length;
   Set<String> _bestSellerProductIds = <String>{};
   Set<String> get bestSellerProductIds =>
       Set<String>.unmodifiable(_bestSellerProductIds);
@@ -70,12 +76,14 @@ class ProductCatalogProvider extends ChangeNotifier {
       );
     } on PostgrestException catch (e) {
       _all = <Product>[];
+      _filtered = <Product>[];
       visible = <Product>[];
       _bestSellerProductIds = <String>{};
       error = e.message.isEmpty ? 'Failed to load products' : e.message;
       _logError(action: 'fetch_products', message: error ?? 'Unknown error');
     } catch (_) {
       _all = <Product>[];
+      _filtered = <Product>[];
       visible = <Product>[];
       _bestSellerProductIds = <String>{};
       error = 'Failed to load products';
@@ -189,12 +197,24 @@ class ProductCatalogProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void loadMoreVisible() {
+    if (loading || !canLoadMore) {
+      return;
+    }
+    final nextCount = visible.length + _loadMoreCount;
+    final targetCount = nextCount > _filtered.length
+        ? _filtered.length
+        : nextCount;
+    visible = _filtered.take(targetCount).toList();
+    notifyListeners();
+  }
+
   void applyFilters() {
     final normalizedQuery = query.trim().toLowerCase();
     final normalizedCategories = _selectedCategories
         .map((value) => value.toLowerCase())
         .toSet();
-    visible = _all.where((p) {
+    _filtered = _all.where((p) {
       final productName = p.name.toLowerCase();
       final productCategory = (p.category ?? '').toLowerCase();
       final qOk =
@@ -206,6 +226,10 @@ class ProductCatalogProvider extends ChangeNotifier {
           normalizedCategories.contains(productCategory);
       return qOk && cOk;
     }).toList();
+    final initialCount = _filtered.length > _initialVisibleCount
+        ? _initialVisibleCount
+        : _filtered.length;
+    visible = _filtered.take(initialCount).toList();
   }
 
   void _logInfo({

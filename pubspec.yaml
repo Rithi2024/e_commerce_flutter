@@ -73,6 +73,7 @@ flutter:
   assets:
     - assets/brand/logo.png
     - assets/brand/splash_logo.png
+    - assets/brand/aba_pay_logo.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:
