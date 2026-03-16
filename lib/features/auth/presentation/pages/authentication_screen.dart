@@ -1,9 +1,12 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'package:marketflow/features/support/presentation/pages/legal_documents_screen.dart';
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
+import 'package:marketflow/features/auth/presentation/pages/auth_error_message.dart';
+import 'package:marketflow/features/auth/presentation/pages/signup_verification_screen.dart';
 import 'package:marketflow/core/widgets/app_brand_logo.dart';
 
 class AuthenticationScreen extends StatefulWidget {
@@ -21,11 +24,25 @@ class _AuthenticationScreenState extends State<AuthenticationScreen> {
 
   bool isLogin = true;
   bool loading = false;
-  bool resendingVerification = false;
-  bool verifyingCode = false;
   bool obscure = true;
   bool promoEmailOptIn = false;
   String error = '';
+
+  void _setAuthMode(bool loginMode) {
+    if (isLogin == loginMode) return;
+    FocusScope.of(context).unfocus();
+    setState(() {
+      isLogin = loginMode;
+      error = '';
+    });
+  }
+
+  void _dismissKeyboard() {
+    final focus = FocusScope.of(context);
+    if (!focus.hasPrimaryFocus) {
+      focus.unfocus();
+    }
+  }
 
   @override
   void dispose() {
@@ -34,6 +51,15 @@ class _AuthenticationScreenState extends State<AuthenticationScreen> {
     email.dispose();
     pass.dispose();
     super.dispose();
+  }
+
+  String _localPhoneDigits() {
+    return phone.text.replaceAll(RegExp(r'[^0-9]'), '');
+  }
+
+  String _normalizedPhone() {
+    final digits = _localPhoneDigits();
+    return digits.isEmpty ? '' : '+855$digits';
   }
 
   String? _validateInput() {
@@ -49,54 +75,14 @@ class _AuthenticationScreenState extends State<AuthenticationScreen> {
 
     if (!isLogin) {
       final nameText = fullName.text.trim();
-      final phoneText = phone.text.trim();
-      final phoneDigits = phoneText.replaceAll(RegExp(r'[^0-9]'), '');
+      final phoneDigits = _localPhoneDigits();
 
       if (nameText.isEmpty) return 'Full name is required';
-      if (phoneText.isEmpty) return 'Phone number is required';
+      if (phoneDigits.isEmpty) return 'Phone number is required';
       if (phoneDigits.length < 8) return 'Enter a valid phone number';
     }
 
     return null;
-  }
-
-  String _friendlyAuthError(Object error) {
-    final raw = error.toString().trim();
-    final normalized = raw.replaceFirst('Exception: ', '').trim();
-    final lower = normalized.toLowerCase();
-
-    if (lower.contains('invalid login credentials')) {
-      return 'Invalid email or password.';
-    }
-    if (lower.contains('email not confirmed')) {
-      return 'Please verify using the 6-digit code sent to your email.';
-    }
-    if (lower.contains('already registered') ||
-        lower.contains('user already exists')) {
-      return 'This email is already registered. Please sign in.';
-    }
-    if (lower.contains('too many requests') || lower.contains('rate limit')) {
-      return 'Too many attempts. Please wait and try again.';
-    }
-    if (lower.contains('network') ||
-        lower.contains('connection') ||
-        lower.contains('socket') ||
-        lower.contains('failed host lookup')) {
-      return 'Network error. Check your internet connection and try again.';
-    }
-    if (lower.contains('password') && lower.contains('at least')) {
-      return 'Password must be at least 6 characters.';
-    }
-    if ((lower.contains('invalid') || lower.contains('expired')) &&
-        (lower.contains('otp') ||
-            lower.contains('code') ||
-            lower.contains('token'))) {
-      return 'Invalid or expired 6-digit verification code.';
-    }
-    if (normalized.isNotEmpty && normalized.length <= 120) {
-      return normalized;
-    }
-    return 'Something went wrong. Please try again.';
   }
 
   String? _validateEmailOnly() {
@@ -105,6 +91,24 @@ class _AuthenticationScreenState extends State<AuthenticationScreen> {
     final emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
     if (!emailPattern.hasMatch(emailText)) return 'Enter a valid email';
     return null;
+  }
+
+  Future<void> _openVerificationScreen({String? introMessage}) async {
+    final emailError = _validateEmailOnly();
+    if (emailError != null) {
+      setState(() => error = emailError);
+      return;
+    }
+
+    _dismissKeyboard();
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => SignupVerificationScreen(
+          initialEmail: email.text.trim(),
+          introMessage: introMessage,
+        ),
+      ),
+    );
   }
 
   Future<void> _submit() async {
@@ -128,167 +132,38 @@ class _AuthenticationScreenState extends State<AuthenticationScreen> {
           email: email.text.trim(),
           password: pass.text.trim(),
           name: fullName.text.trim(),
-          phone: phone.text.trim(),
+          phone: _normalizedPhone(),
           promoEmailOptIn: promoEmailOptIn,
         );
         if (!mounted) return;
         if (auth.user == null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'A 6-digit verification code was sent to your email.',
-              ),
-            ),
+          setState(() {
+            isLogin = true;
+            loading = false;
+          });
+          await _openVerificationScreen(
+            introMessage:
+                'We sent a verification code to your email. Check inbox and spam if you do not see it right away.',
           );
-          setState(() => isLogin = true);
         }
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => error = _friendlyAuthError(e));
+      if (isLogin && requiresEmailVerification(e)) {
+        setState(() {
+          loading = false;
+          error = '';
+        });
+        await _openVerificationScreen(
+          introMessage:
+              'Your account still needs email verification. Enter your 6-digit code below, or resend a new one.',
+        );
+      } else {
+        setState(() => error = friendlyAuthErrorMessage(e));
+      }
     } finally {
       if (mounted) {
         setState(() => loading = false);
-      }
-    }
-  }
-
-  Future<void> _resendVerification() async {
-    final emailError = _validateEmailOnly();
-    if (emailError != null) {
-      setState(() => error = emailError);
-      return;
-    }
-
-    setState(() {
-      resendingVerification = true;
-      error = '';
-    });
-
-    final auth = context.read<AuthenticationProvider>();
-    try {
-      await auth.resendSignupVerification(email: email.text.trim());
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            '6-digit verification code sent. Check inbox and spam folder.',
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      final message = _friendlyAuthError(e);
-      setState(() => error = message);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    } finally {
-      if (mounted) {
-        setState(() => resendingVerification = false);
-      }
-    }
-  }
-
-  Future<String?> _promptForVerificationCode() async {
-    final controller = TextEditingController();
-    String dialogError = '';
-    final result = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text('Verify Email'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'Enter the 6-digit code sent to your email.',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: controller,
-                    keyboardType: TextInputType.number,
-                    maxLength: 6,
-                    decoration: const InputDecoration(
-                      labelText: '6-digit code',
-                      border: OutlineInputBorder(),
-                      counterText: '',
-                    ),
-                  ),
-                  if (dialogError.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      dialogError,
-                      style: const TextStyle(
-                        color: Color(0xFFA7192E),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    final code = controller.text.trim();
-                    if (!RegExp(r'^\d{6}$').hasMatch(code)) {
-                      setDialogState(
-                        () => dialogError = 'Enter a valid 6-digit code',
-                      );
-                      return;
-                    }
-                    Navigator.pop(dialogContext, code);
-                  },
-                  child: const Text('Verify'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-    controller.dispose();
-    return result;
-  }
-
-  Future<void> _verifySignupCode() async {
-    final emailError = _validateEmailOnly();
-    if (emailError != null) {
-      setState(() => error = emailError);
-      return;
-    }
-    final code = await _promptForVerificationCode();
-    if (!mounted || code == null) return;
-
-    setState(() {
-      verifyingCode = true;
-      error = '';
-    });
-
-    final auth = context.read<AuthenticationProvider>();
-    try {
-      await auth.verifySignupCode(email: email.text.trim(), code: code);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Email verified successfully.')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      final message = _friendlyAuthError(e);
-      setState(() => error = message);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
-    } finally {
-      if (mounted) {
-        setState(() => verifyingCode = false);
       }
     }
   }
@@ -299,220 +174,445 @@ class _AuthenticationScreenState extends State<AuthenticationScreen> {
     ).push(MaterialPageRoute(builder: (_) => LegalDocumentsScreen(type: type)));
   }
 
-  Widget _buildAuthCard(ColorScheme colors) {
+  InputDecoration _fieldDecoration({
+    required String hint,
+    required IconData icon,
+    Widget? suffixIcon,
+    String? prefixText,
+  }) {
+    return InputDecoration(
+      hintText: hint,
+      prefixIcon: Icon(icon),
+      suffixIcon: suffixIcon,
+      prefixText: prefixText,
+      fillColor: const Color(0xFFF7FBF9),
+      filled: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(color: Color(0xFFD7E3DE)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(color: Color(0xFFD7E3DE)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(color: Color(0xFF0B7D69), width: 1.5),
+      ),
+    );
+  }
+
+  Widget _buildInputLabel(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        color: Color(0xFF244A42),
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+    required IconData icon,
+    TextInputType? keyboardType,
+    List<String>? autofillHints,
+    TextCapitalization textCapitalization = TextCapitalization.none,
+    TextInputAction? textInputAction,
+    bool obscureText = false,
+    Widget? suffixIcon,
+    List<TextInputFormatter>? inputFormatters,
+    String? prefixText,
+    VoidCallback? onSubmitted,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildInputLabel(label),
+        const SizedBox(height: 8),
+        TextField(
+          controller: controller,
+          keyboardType: keyboardType,
+          autofillHints: autofillHints,
+          textCapitalization: textCapitalization,
+          textInputAction: textInputAction,
+          obscureText: obscureText,
+          inputFormatters: inputFormatters,
+          decoration: _fieldDecoration(
+            hint: hint,
+            icon: icon,
+            suffixIcon: suffixIcon,
+            prefixText: prefixText,
+          ),
+          onTapOutside: (_) => _dismissKeyboard(),
+          onSubmitted: (_) => onSubmitted?.call(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHeaderBlock() {
+    final title = isLogin ? 'Welcome back' : 'Create your account';
+    final subtitle = isLogin
+        ? 'Sign in to continue shopping, manage orders, and pick up where you left off.'
+        : 'Set up your MarketFlow account to save addresses, track orders, and get support faster.';
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compactHeader = constraints.maxWidth < 390;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const BrandLogo(size: 48, showWordmark: false),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Text(
+                        Brand.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 21,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF143C35),
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        Brand.tagline,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF60706A),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: compactHeader ? 9 : 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE8F5F1),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      isLogin ? 'Secure sign in' : 'New customer',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF0B6C5C),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              child: Column(
+                key: ValueKey(isLogin),
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: compactHeader ? 24 : 26,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5,
+                      color: const Color(0xFF143C35),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      height: 1.45,
+                      color: Color(0xFF60706A),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildErrorBanner() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFE0E5E5)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x22000000),
-            blurRadius: 26,
-            offset: Offset(0, 16),
+        color: const Color(0xFFFDEBEC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF1C6CD)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Icon(
+              Icons.info_outline_rounded,
+              color: Color(0xFFA7192E),
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              error,
+              style: const TextStyle(
+                color: Color(0xFFA7192E),
+                fontWeight: FontWeight.w600,
+                height: 1.35,
+              ),
+            ),
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const BrandLogo(size: 46),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF2F5F4),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _ModeChip(
-                    text: 'Sign In',
-                    active: isLogin,
-                    onTap: () => setState(() => isLogin = true),
-                  ),
-                ),
-                Expanded(
-                  child: _ModeChip(
-                    text: 'Create Account',
-                    active: !isLogin,
-                    onTap: () => setState(() => isLogin = false),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          if (!isLogin) ...[
-            TextField(
-              controller: fullName,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                labelText: 'Full name',
-                prefixIcon: Icon(Icons.person_outline_rounded),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: phone,
-              keyboardType: TextInputType.phone,
-              decoration: const InputDecoration(
-                labelText: 'Phone number',
-                prefixIcon: Icon(Icons.phone_outlined),
-              ),
-            ),
-            const SizedBox(height: 12),
-          ],
-          TextField(
-            controller: email,
-            keyboardType: TextInputType.emailAddress,
-            decoration: const InputDecoration(
-              labelText: 'Email',
-              prefixIcon: Icon(Icons.alternate_email_rounded),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: pass,
-            obscureText: obscure,
-            decoration: InputDecoration(
-              labelText: 'Password',
-              prefixIcon: const Icon(Icons.lock_outline_rounded),
-              suffixIcon: IconButton(
-                onPressed: () {
-                  setState(() => obscure = !obscure);
-                },
-                icon: Icon(
-                  obscure
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
-                ),
-              ),
-            ),
-          ),
-          if (!isLogin) ...[
-            const SizedBox(height: 8),
-            CheckboxListTile(
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              value: promoEmailOptIn,
-              onChanged: (value) {
-                setState(() => promoEmailOptIn = value == true);
-              },
-              title: const Text(
-                'Send me promotional emails',
-                style: TextStyle(fontSize: 14),
-              ),
-            ),
-          ],
-          if (error.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFDEBEC),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                error,
-                style: const TextStyle(color: Color(0xFFA7192E)),
-              ),
-            ),
-          ],
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: loading ? null : _submit,
-              style: ElevatedButton.styleFrom(backgroundColor: colors.primary),
-              child: loading
-                  ? const SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : Text(isLogin ? 'Sign In' : 'Create Account'),
-            ),
-          ),
-          if (isLogin) ...[
-            const SizedBox(height: 8),
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 0,
-              children: [
-                TextButton(
-                  onPressed: verifyingCode ? null : _verifySignupCode,
-                  child: verifyingCode
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Verify 6-digit code'),
-                ),
-                TextButton(
-                  onPressed: resendingVerification ? null : _resendVerification,
-                  child: resendingVerification
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Resend code'),
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: 8),
-          Center(
-            child: Wrap(
-              alignment: WrapAlignment.center,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text(
-                  'By continuing you agree to our ',
-                  style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
-                ),
-                InkWell(
-                  onTap: () => _openLegal(LegalDocumentType.terms),
-                  child: const Text(
-                    'Terms',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      decoration: TextDecoration.underline,
-                    ),
-                  ),
-                ),
-                Text(
-                  ' and ',
-                  style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
-                ),
-                InkWell(
-                  onTap: () => _openLegal(LegalDocumentType.privacy),
-                  child: const Text(
-                    'Privacy Policy',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      decoration: TextDecoration.underline,
-                    ),
-                  ),
-                ),
-                Text(
-                  '.',
-                  style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
-                ),
-              ],
-            ),
+    );
+  }
+
+  Widget _buildAuthCard(ColorScheme colors) {
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEFFFE),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: const Color(0xFFE0E8E4)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x19000000),
+            blurRadius: 36,
+            offset: Offset(0, 20),
           ),
         ],
+      ),
+      child: AutofillGroup(
+        child: AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeaderBlock(),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF2F5F4),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _ModeChip(
+                        text: 'Sign In',
+                        active: isLogin,
+                        onTap: () => _setAuthMode(true),
+                      ),
+                    ),
+                    Expanded(
+                      child: _ModeChip(
+                        text: 'Create Account',
+                        active: !isLogin,
+                        onTap: () => _setAuthMode(false),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              if (!isLogin) ...[
+                _buildTextField(
+                  controller: fullName,
+                  label: 'Full name',
+                  hint: 'Your full name',
+                  icon: Icons.person_outline_rounded,
+                  textCapitalization: TextCapitalization.words,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.name],
+                ),
+                const SizedBox(height: 14),
+                _buildTextField(
+                  controller: phone,
+                  label: 'Phone number',
+                  hint: '12 345 678',
+                  icon: Icons.phone_outlined,
+                  keyboardType: TextInputType.phone,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.telephoneNumber],
+                  prefixText: '+855 ',
+                  inputFormatters: const [_CambodiaPhoneNumberFormatter()],
+                ),
+                const SizedBox(height: 14),
+              ],
+              _buildTextField(
+                controller: email,
+                label: 'Email',
+                hint: 'you@example.com',
+                icon: Icons.alternate_email_rounded,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.next,
+                autofillHints: const [AutofillHints.email],
+              ),
+              const SizedBox(height: 14),
+              _buildTextField(
+                controller: pass,
+                label: 'Password',
+                hint: isLogin ? 'Enter your password' : 'At least 6 characters',
+                icon: Icons.lock_outline_rounded,
+                obscureText: obscure,
+                textInputAction: TextInputAction.done,
+                autofillHints: isLogin
+                    ? const [AutofillHints.password]
+                    : const [AutofillHints.newPassword],
+                suffixIcon: IconButton(
+                  onPressed: () {
+                    setState(() => obscure = !obscure);
+                  },
+                  icon: Icon(
+                    obscure
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                ),
+                onSubmitted: _submit,
+              ),
+              if (!isLogin) ...[
+                const SizedBox(height: 10),
+                Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF4F8F6),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: CheckboxListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: promoEmailOptIn,
+                    onChanged: (value) {
+                      setState(() => promoEmailOptIn = value == true);
+                    },
+                    checkboxShape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    title: const Text(
+                      'Send me promotional emails',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: const Text(
+                      'Get product drops, offers, and updates occasionally.',
+                      style: TextStyle(fontSize: 12.5),
+                    ),
+                  ),
+                ),
+              ],
+              if (error.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                _buildErrorBanner(),
+              ],
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: loading ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.primary,
+                    minimumSize: const Size.fromHeight(56),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                  ),
+                  child: loading
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(isLogin ? 'Sign In' : 'Create Account'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Center(
+                child: Wrap(
+                  alignment: WrapAlignment.center,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'By continuing you agree to our ',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () => _openLegal(LegalDocumentType.terms),
+                      child: const Text(
+                        'Terms',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      ' and ',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                    InkWell(
+                      onTap: () => _openLegal(LegalDocumentType.privacy),
+                      child: const Text(
+                        'Privacy Policy',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '.',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -585,6 +685,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final size = MediaQuery.sizeOf(context);
+    final viewInsets = MediaQuery.viewInsetsOf(context);
     final useDesktopLayout = kIsWeb && size.width >= 980;
 
     return Scaffold(
@@ -592,28 +693,45 @@ class _AuthenticationScreenState extends State<AuthenticationScreen> {
         children: [
           const _BackgroundDecor(),
           SafeArea(
-            child: Center(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.all(useDesktopLayout ? 24 : 18),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: useDesktopLayout ? 1120 : 430,
+            child: GestureDetector(
+              onTap: _dismissKeyboard,
+              behavior: HitTestBehavior.translucent,
+              child: Align(
+                alignment: useDesktopLayout
+                    ? Alignment.center
+                    : Alignment.topCenter,
+                child: SingleChildScrollView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.fromLTRB(
+                    useDesktopLayout ? 24 : 18,
+                    useDesktopLayout ? 24 : 22,
+                    useDesktopLayout ? 24 : 18,
+                    (useDesktopLayout ? 24 : 22) + viewInsets.bottom,
                   ),
-                  child: useDesktopLayout
-                      ? SizedBox(
-                          height: 660,
-                          child: Row(
-                            children: [
-                              Expanded(child: _buildWebIntroPanel()),
-                              const SizedBox(width: 22),
-                              SizedBox(
-                                width: 440,
-                                child: _buildAuthCard(colors),
-                              ),
-                            ],
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: useDesktopLayout ? 1120 : 430,
+                    ),
+                    child: useDesktopLayout
+                        ? SizedBox(
+                            height: 660,
+                            child: Row(
+                              children: [
+                                Expanded(child: _buildWebIntroPanel()),
+                                const SizedBox(width: 22),
+                                SizedBox(
+                                  width: 440,
+                                  child: _buildAuthCard(colors),
+                                ),
+                              ],
+                            ),
+                          )
+                        : Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: _buildAuthCard(colors),
                           ),
-                        )
-                      : _buildAuthCard(colors),
+                  ),
                 ),
               ),
             ),
@@ -704,6 +822,33 @@ class _ModeChip extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _CambodiaPhoneNumberFormatter extends TextInputFormatter {
+  const _CambodiaPhoneNumberFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    var digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+
+    if (digits.startsWith('855')) {
+      digits = digits.substring(3);
+    }
+    if (digits.startsWith('0')) {
+      digits = digits.substring(1);
+    }
+    if (digits.length > 9) {
+      digits = digits.substring(0, 9);
+    }
+
+    return TextEditingValue(
+      text: digits,
+      selection: TextSelection.collapsed(offset: digits.length),
     );
   }
 }

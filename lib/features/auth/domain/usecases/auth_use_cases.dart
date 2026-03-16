@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:marketflow/features/auth/domain/entities/user_profile_model.dart';
 import 'package:marketflow/features/auth/domain/repository/auth_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -52,6 +54,27 @@ class AuthUseCases {
     required String code,
   }) {
     return _repository.confirmEmailChange(newEmail: newEmail, code: code);
+  }
+
+  Future<void> updatePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) {
+    return _repository.updatePassword(
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+  }
+
+  Future<User?> updateUserMetadata({required Map<String, dynamic> data}) {
+    return _repository.updateUserMetadata(data: data);
+  }
+
+  Future<String> uploadProfileAvatar({
+    required Uint8List bytes,
+    required String fileName,
+  }) {
+    return _repository.uploadProfileAvatar(bytes: bytes, fileName: fileName);
   }
 
   Future<void> logout() => _repository.logout();

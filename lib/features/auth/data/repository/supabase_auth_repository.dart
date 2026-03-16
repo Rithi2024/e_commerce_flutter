@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:marketflow/config/auth_email_config.dart';
 import 'package:marketflow/core/network/supabase_data_proxy.dart';
 import 'package:marketflow/core/network/supabase_function_proxy.dart';
@@ -6,6 +8,8 @@ import 'package:marketflow/features/auth/domain/repository/auth_repository.dart'
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseAuthRepository implements AuthRepository {
+  static const String _profileAvatarsBucket = 'profile-avatars';
+
   final SupabaseClient _db;
   final SupabaseFunctionProxy _functionProxy;
   final SupabaseDataProxy _dataProxy;
@@ -153,6 +157,85 @@ class SupabaseAuthRepository implements AuthRepository {
   }
 
   @override
+  Future<void> updatePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final currentUser = _db.auth.currentUser;
+    final email = (currentUser?.email ?? '').trim();
+    final cleanCurrentPassword = currentPassword.trim();
+    final cleanPassword = newPassword.trim();
+    if (email.isEmpty) {
+      throw AuthException('Email sign-in is required to change password');
+    }
+    if (cleanCurrentPassword.isEmpty) {
+      throw AuthException('Current password is required');
+    }
+    if (cleanPassword.isEmpty) {
+      throw AuthException('New password is required');
+    }
+    await _db.auth.signInWithPassword(
+      email: email,
+      password: cleanCurrentPassword,
+    );
+    await _db.auth.updateUser(UserAttributes(password: cleanPassword));
+  }
+
+  @override
+  Future<User?> updateUserMetadata({required Map<String, dynamic> data}) async {
+    final merged = Map<String, dynamic>.from(
+      _db.auth.currentUser?.userMetadata ?? const <String, dynamic>{},
+    );
+    for (final entry in data.entries) {
+      if (entry.value == null) {
+        merged.remove(entry.key);
+      } else {
+        merged[entry.key] = entry.value;
+      }
+    }
+    final response = await _db.auth.updateUser(UserAttributes(data: merged));
+    return response.user ?? _db.auth.currentUser;
+  }
+
+  @override
+  Future<String> uploadProfileAvatar({
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) {
+      throw AuthException('Please sign in to update your profile photo');
+    }
+    if (bytes.isEmpty) {
+      throw AuthException('Selected image is empty');
+    }
+
+    final extension = _guessImageExtension(fileName);
+    final safeFileName = _sanitizeFileName(fileName, extension);
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final storagePath = '$userId/avatar_${timestamp}_$safeFileName';
+    final storage = _db.storage.from(_profileAvatarsBucket);
+
+    try {
+      await storage.uploadBinary(
+        storagePath,
+        bytes,
+        fileOptions: FileOptions(
+          upsert: true,
+          contentType: _contentTypeForImageExtension(extension),
+        ),
+      );
+    } on StorageException catch (error) {
+      final message = error.message.trim();
+      throw Exception(
+        message.isEmpty ? 'Failed to upload profile photo' : message,
+      );
+    }
+
+    return storage.getPublicUrl(storagePath);
+  }
+
+  @override
   Future<void> logout() => _db.auth.signOut();
 
   @override
@@ -267,5 +350,44 @@ class SupabaseAuthRepository implements AuthRepository {
           message.contains('REQUESTED FUNCTION WAS NOT FOUND');
     }
     return true;
+  }
+
+  String _guessImageExtension(String fileName) {
+    final normalized = fileName.trim().toLowerCase();
+    if (normalized.endsWith('.png')) return 'png';
+    if (normalized.endsWith('.webp')) return 'webp';
+    if (normalized.endsWith('.gif')) return 'gif';
+    if (normalized.endsWith('.bmp')) return 'bmp';
+    return 'jpg';
+  }
+
+  String _sanitizeFileName(String fileName, String extension) {
+    final trimmed = fileName.trim();
+    final fallback = 'profile.$extension';
+    if (trimmed.isEmpty) return fallback;
+
+    final segments = trimmed.split(RegExp(r'[\\/]'));
+    var sanitized = segments.isEmpty ? trimmed : segments.last;
+    sanitized = sanitized.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    if (sanitized.isEmpty) return fallback;
+    if (!sanitized.contains('.')) {
+      sanitized = '$sanitized.$extension';
+    }
+    return sanitized;
+  }
+
+  String _contentTypeForImageExtension(String extension) {
+    switch (extension.toLowerCase()) {
+      case 'png':
+        return 'image/png';
+      case 'webp':
+        return 'image/webp';
+      case 'gif':
+        return 'image/gif';
+      case 'bmp':
+        return 'image/bmp';
+      default:
+        return 'image/jpeg';
+    }
   }
 }

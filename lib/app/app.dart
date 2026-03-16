@@ -18,6 +18,7 @@ import 'package:marketflow/config/routes/app_routes.dart';
 import 'package:marketflow/config/theme/app_scroll_behavior.dart';
 import 'package:marketflow/config/theme/ecommerce_app_theme.dart';
 import 'package:marketflow/features/checkout/domain/repository/order_repository.dart';
+import 'package:marketflow/features/catalog/domain/entities/product_model.dart';
 import 'package:marketflow/features/catalog/domain/repository/product_repository.dart';
 import 'package:marketflow/features/wishlist/domain/repository/wishlist_repository.dart';
 import 'package:marketflow/features/admin/domain/usecases/admin_use_cases.dart';
@@ -32,6 +33,7 @@ import 'package:marketflow/features/settings/presentation/bloc/app_settings_prov
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
 import 'package:marketflow/features/checkout/presentation/bloc/order_management_provider.dart';
 import 'package:marketflow/features/catalog/presentation/bloc/product_catalog_provider.dart';
+import 'package:marketflow/features/catalog/presentation/pages/product_details_screen.dart';
 import 'package:marketflow/features/cart/presentation/bloc/shopping_cart_provider.dart';
 import 'package:marketflow/features/wishlist/presentation/bloc/user_wishlist_provider.dart';
 import 'package:flutter/material.dart';
@@ -240,8 +242,156 @@ class _AppEntry extends StatelessWidget {
           return const AdminDashboardScreen();
         }
 
-        return const MainNavigationShell();
+        if (routeRequest.productKey != null) {
+          return _CatalogProductRouteScreen(
+            productKey: routeRequest.productKey!,
+            collectionFilter: routeRequest.collectionFilter,
+          );
+        }
+
+        return MainNavigationShell(
+          initialCollectionFilter: routeRequest.collectionFilter,
+        );
       },
+    );
+  }
+}
+
+class _CatalogProductRouteScreen extends StatefulWidget {
+  const _CatalogProductRouteScreen({
+    required this.productKey,
+    this.collectionFilter,
+  });
+
+  final String productKey;
+  final CatalogCollectionFilter? collectionFilter;
+
+  @override
+  State<_CatalogProductRouteScreen> createState() =>
+      _CatalogProductRouteScreenState();
+}
+
+class _CatalogProductRouteScreenState
+    extends State<_CatalogProductRouteScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _prepareCatalog();
+    });
+  }
+
+  Future<void> _prepareCatalog() async {
+    if (!mounted) return;
+    final catalog = context.read<ProductCatalogProvider>();
+    final collectionFilter = widget.collectionFilter;
+    if (collectionFilter != null &&
+        catalog.activeCollectionFilter != collectionFilter) {
+      catalog.showCollection(collectionFilter);
+    }
+    if (catalog.all.isNotEmpty || catalog.loading) {
+      return;
+    }
+    await catalog.fetchProducts();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<ProductCatalogProvider>(
+      builder: (context, catalog, _) {
+        Product? product;
+        for (final item in catalog.all) {
+          if (item.matchesRouteKey(widget.productKey)) {
+            product = item;
+            break;
+          }
+        }
+
+        if (product != null) {
+          return ProductDetailsScreen(product: product);
+        }
+
+        if (catalog.loading) {
+          return const _CatalogRouteLoadingScreen();
+        }
+
+        if (catalog.error != null) {
+          return _CatalogRouteStatusScreen(
+            title: 'Unable to open product',
+            message: catalog.error!,
+            actionLabel: 'Retry',
+            onPressed: () {
+              _prepareCatalog();
+            },
+          );
+        }
+
+        return _CatalogRouteStatusScreen(
+          title: 'Product not found',
+          message:
+              'This product is unavailable or the link is no longer valid.',
+          actionLabel: widget.collectionFilter != null
+              ? 'Browse ${widget.collectionFilter!.label}'
+              : 'Back to store',
+          onPressed: () {
+            Navigator.of(context).pushReplacementNamed(
+              AppRoutes.catalogRoute(collection: widget.collectionFilter?.slug),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _CatalogRouteLoadingScreen extends StatelessWidget {
+  const _CatalogRouteLoadingScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+  }
+}
+
+class _CatalogRouteStatusScreen extends StatelessWidget {
+  const _CatalogRouteStatusScreen({
+    required this.title,
+    required this.message,
+    required this.actionLabel,
+    required this.onPressed,
+  });
+
+  final String title;
+  final String message;
+  final String actionLabel;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.inventory_2_outlined,
+                  size: 52,
+                  color: Color(0xFF7A2E2E),
+                ),
+                const SizedBox(height: 12),
+                Text(message, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                FilledButton(onPressed: onPressed, child: Text(actionLabel)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -330,9 +480,19 @@ class _SupportAccessDeniedScreen extends StatelessWidget {
 
 class _AppRouteRequest {
   _AppRouteRequest(String requestedPath)
-    : _normalizedPath = requestedPath.trim().toLowerCase();
+    : _uri = _parseUri(requestedPath),
+      _normalizedPath = _parseUri(requestedPath).path.toLowerCase();
 
+  final Uri _uri;
   final String _normalizedPath;
+
+  CatalogCollectionFilter? get collectionFilter =>
+      catalogCollectionFilterFromSlug(_uri.queryParameters['collection']);
+
+  String? get productKey {
+    final value = (_uri.queryParameters['product'] ?? '').trim();
+    return value.isEmpty ? null : value;
+  }
 
   bool get isSupport =>
       _normalizedPath == AppRoutes.support ||
@@ -343,4 +503,12 @@ class _AppRouteRequest {
       _normalizedPath.startsWith('${AppRoutes.staff}/') ||
       _normalizedPath == AppRoutes.admin ||
       _normalizedPath.startsWith('${AppRoutes.admin}/');
+
+  static Uri _parseUri(String requestedPath) {
+    final trimmed = requestedPath.trim();
+    if (trimmed.isEmpty) {
+      return Uri.parse(AppRoutes.home);
+    }
+    return Uri.tryParse(trimmed) ?? Uri.parse(AppRoutes.home);
+  }
 }

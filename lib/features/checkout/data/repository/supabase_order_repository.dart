@@ -1,4 +1,6 @@
 import 'package:marketflow/config/payway_config.dart';
+import 'package:marketflow/core/auth/profile_identity_text.dart';
+import 'package:marketflow/core/location/address_text.dart';
 import 'package:marketflow/core/network/local_cache_service.dart';
 import 'package:marketflow/core/network/supabase_data_proxy.dart';
 import 'package:marketflow/core/network/supabase_function_proxy.dart';
@@ -99,12 +101,17 @@ class SupabaseOrderRepository implements OrderRepository {
 
     final profile = results[0] as Map<String, dynamic>?;
     final orders = (results[1] as List<Map<String, dynamic>>?) ?? const [];
-    final unique = <String>{};
-
-    final profileAddress = (profile?['address'] ?? '').toString().trim();
+    final currentUser = _db.auth.currentUser;
+    final userMetadata = Map<String, dynamic>.from(
+      currentUser?.userMetadata ?? const <String, dynamic>{},
+    );
+    final savedAddressCandidates = <String>[];
+    final profileAddress = AddressText.deliveryAddressOrEmpty(
+      (profile?['address'] ?? '').toString(),
+    );
     if (profileAddress.isNotEmpty &&
         profileAddress.toLowerCase() != _pickupAddressLabel) {
-      unique.add(profileAddress);
+      savedAddressCandidates.add(profileAddress);
     }
 
     for (final row in orders) {
@@ -115,19 +122,30 @@ class SupabaseOrderRepository implements OrderRepository {
       if (_isPickupDeliveryType(deliveryType)) {
         continue;
       }
-      final orderAddress = (row['address'] ?? '').toString().trim();
+      final orderAddress = AddressText.deliveryAddressOrEmpty(
+        (row['address'] ?? '').toString(),
+      );
       if (orderAddress.isNotEmpty &&
           orderAddress.toLowerCase() != _pickupAddressLabel) {
-        unique.add(orderAddress);
+        savedAddressCandidates.add(orderAddress);
       }
     }
 
-    final savedAddresses = unique.toList();
+    final savedAddresses = AddressText.uniqueDeliveryAddresses(
+      savedAddressCandidates,
+    );
 
     return CheckoutPrefill(
       defaultAddress: savedAddresses.isNotEmpty ? savedAddresses.first : '',
-      contactName: (profile?['name'] ?? '').toString().trim(),
-      contactPhone: (profile?['phone'] ?? '').toString().trim(),
+      contactName: ProfileIdentityText.contactName(
+        explicitName: (profile?['name'] ?? '').toString(),
+        userMetadata: userMetadata,
+        email: currentUser?.email ?? '',
+      ),
+      contactPhone: ProfileIdentityText.contactPhone(
+        explicitPhone: (profile?['phone'] ?? '').toString(),
+        userMetadata: userMetadata,
+      ),
       savedAddresses: savedAddresses,
     );
   }
@@ -141,9 +159,10 @@ class SupabaseOrderRepository implements OrderRepository {
     required String userId,
     required String address,
   }) async {
+    final normalizedAddress = AddressText.deliveryAddressOrEmpty(address);
     await _dataProxy.update(
       table: 'profiles',
-      values: <String, dynamic>{'address': address},
+      values: <String, dynamic>{'address': normalizedAddress},
       filters: <DataProxyFilter>[DataProxyFilter.eq('id', userId)],
     );
     await _cache.remove(key: _ordersCacheKey);

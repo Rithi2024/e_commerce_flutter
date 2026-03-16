@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
+import 'package:marketflow/config/routes/app_routes.dart';
 import 'package:marketflow/features/settings/presentation/bloc/app_settings_provider.dart';
 import 'package:marketflow/features/catalog/presentation/bloc/product_catalog_provider.dart';
 import 'package:marketflow/features/wishlist/presentation/bloc/user_wishlist_provider.dart';
@@ -8,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:marketflow/features/catalog/domain/entities/product_model.dart';
-import 'package:marketflow/features/catalog/presentation/pages/product_details_screen.dart';
 
 class WishlistOverviewScreen extends StatefulWidget {
   const WishlistOverviewScreen({super.key});
@@ -194,11 +194,8 @@ class _WishlistOverviewScreenState extends State<WishlistOverviewScreen> {
                           onPressed: () => _toggleFavorite(item),
                           isFavorite: true,
                         ),
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => ProductDetailsScreen(product: item),
-                          ),
+                        onTap: () => Navigator.of(context).pushNamed(
+                          AppRoutes.catalogRoute(productKey: item.slug),
                         ),
                       );
                     },

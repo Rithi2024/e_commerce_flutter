@@ -1,10 +1,15 @@
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
+import 'package:marketflow/config/routes/app_routes.dart';
 import 'package:marketflow/features/settings/presentation/bloc/app_settings_provider.dart';
 import 'package:marketflow/features/catalog/presentation/bloc/product_catalog_provider.dart';
+import 'package:marketflow/features/catalog/presentation/helpers/product_review_content.dart';
+import 'package:marketflow/features/catalog/presentation/helpers/product_share_content.dart';
 import 'package:marketflow/features/wishlist/presentation/bloc/user_wishlist_provider.dart';
 import 'package:marketflow/core/network/supabase_data_proxy.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:marketflow/core/widgets/favorite_icon_button.dart';
 
@@ -43,12 +48,28 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
   double _avgRating = 0;
   int? _myRating;
   String _myReview = '';
-  late final SupabaseDataProxy _dataProxy;
+  ProductRatingBreakdown _ratingBreakdown = const ProductRatingBreakdown();
+  List<ProductReviewEntry> _reviewEntries = const <ProductReviewEntry>[];
+  bool _showAllReviews = false;
+  ProductReviewSortOption _reviewSortOption = ProductReviewSortOption.recent;
+  int? _selectedReviewRating;
+  bool _onlyMyReviews = false;
+  SupabaseDataProxy? _dataProxy;
 
   @override
   void initState() {
     super.initState();
-    _dataProxy = SupabaseDataProxy(db: Supabase.instance.client);
+    try {
+      _dataProxy = SupabaseDataProxy(db: Supabase.instance.client);
+    } catch (_) {
+      _dataProxy = null;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<ProductCatalogProvider>().recordRecentlyViewed(
+        widget.product,
+      );
+    });
     Future.microtask(() async {
       await Future.wait([_loadVariantStock(), _loadRatingState()]);
     });
@@ -150,6 +171,24 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
   }
 
   Future<void> _loadRatingState() async {
+    final dataProxy = _dataProxy;
+    if (dataProxy == null) {
+      if (!mounted) return;
+      setState(() {
+        _ratingFeatureAvailable = false;
+        _ratingCount = 0;
+        _avgRating = 0;
+        _myRating = null;
+        _myReview = '';
+        _ratingBreakdown = const ProductRatingBreakdown();
+        _reviewEntries = const <ProductReviewEntry>[];
+        _showAllReviews = false;
+        _canRateProduct = false;
+        _loadingRating = false;
+      });
+      return;
+    }
+
     final productId = widget.product.id;
     final userId = context.read<AuthenticationProvider>().user?.id;
 
@@ -158,16 +197,25 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     var averageRating = 0.0;
     int? myRating;
     var myReview = '';
+    var ratingBreakdown = const ProductRatingBreakdown();
+    var reviewEntries = const <ProductReviewEntry>[];
     var canRateProduct = false;
 
     try {
-      final rows = await _dataProxy.select(
-        table: 'product_ratings',
-        columns: 'rating',
-        filters: <DataProxyFilter>[DataProxyFilter.eq('product_id', productId)],
+      final rows = List<Map<String, dynamic>>.from(
+        await dataProxy.select(
+          table: 'product_ratings',
+          columns: 'user_id,rating,review,updated_at',
+          filters: <DataProxyFilter>[
+            DataProxyFilter.eq('product_id', productId),
+          ],
+          orders: const <DataProxyOrder>[
+            DataProxyOrder('updated_at', ascending: false, nullsFirst: false),
+          ],
+        ),
       );
 
-      final ratings = List<Map<String, dynamic>>.from(rows)
+      final ratings = rows
           .map((row) => _toInt(row['rating']))
           .where((value) => value >= 1 && value <= 5)
           .toList();
@@ -175,6 +223,27 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       if (ratings.isNotEmpty) {
         final total = ratings.fold<int>(0, (sum, value) => sum + value);
         averageRating = total / ratings.length;
+      }
+
+      ratingBreakdown = buildProductRatingBreakdown(rows);
+      reviewEntries = buildProductReviewEntries(
+        rows: rows,
+        currentUserId: userId,
+      );
+
+      if (userId != null) {
+        for (final row in rows) {
+          final reviewUserId = (row['user_id'] ?? '').toString().trim();
+          if (reviewUserId != userId) {
+            continue;
+          }
+          final value = _toInt(row['rating'], fallback: 0);
+          if (value >= 1 && value <= 5) {
+            myRating = value;
+          }
+          myReview = (row['review'] ?? '').toString();
+          break;
+        }
       }
     } on PostgrestException catch (error) {
       if (_isMissingRatingTable(error)) {
@@ -184,28 +253,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
 
     if (userId != null && ratingFeatureAvailable) {
       try {
-        final ratingRows = await _dataProxy.select(
-          table: 'product_ratings',
-          columns: 'rating,review',
-          filters: <DataProxyFilter>[
-            DataProxyFilter.eq('product_id', productId),
-            DataProxyFilter.eq('user_id', userId),
-          ],
-          limit: 1,
-        );
-        final rows = List<Map<String, dynamic>>.from(ratingRows);
-        if (rows.isNotEmpty) {
-          final row = rows.first;
-          final value = _toInt(row['rating'], fallback: 0);
-          if (value >= 1 && value <= 5) {
-            myRating = value;
-          }
-          myReview = (row['review'] ?? '').toString();
-        }
-      } catch (_) {}
-
-      try {
-        final orderRows = await _dataProxy.select(
+        final orderRows = await dataProxy.select(
           table: 'orders',
           columns: 'status,items',
           filters: <DataProxyFilter>[DataProxyFilter.eq('user_id', userId)],
@@ -224,6 +272,9 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       _avgRating = averageRating;
       _myRating = myRating;
       _myReview = myReview;
+      _ratingBreakdown = ratingBreakdown;
+      _reviewEntries = reviewEntries;
+      _showAllReviews = _showAllReviews && reviewEntries.length > 3;
       _canRateProduct = canRateProduct;
       _loadingRating = false;
     });
@@ -246,10 +297,14 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       );
       return;
     }
+    final dataProxy = _dataProxy;
+    if (dataProxy == null) {
+      return;
+    }
 
     setState(() => _submittingRating = true);
     try {
-      await _dataProxy.upsert(
+      await dataProxy.upsert(
         table: 'product_ratings',
         values: <String, dynamic>{
           'user_id': userId,
@@ -411,6 +466,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             imageUrl: product.imageUrl,
             description: product.description,
             category: product.category,
+            createdAt: product.createdAt,
           );
     try {
       await context.read<ShoppingCartProvider>().addToCart(
@@ -437,6 +493,66 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const ShoppingCartScreen()),
+    );
+  }
+
+  Future<void> _openProductDetails(Product product) async {
+    if (!mounted) return;
+    final collectionSlug = context
+        .read<ProductCatalogProvider>()
+        .activeCollectionFilter
+        ?.slug;
+    await Navigator.of(context).pushNamed(
+      AppRoutes.catalogRoute(
+        collection: collectionSlug,
+        productKey: product.slug,
+      ),
+    );
+  }
+
+  Future<void> _shareProduct(Product product) async {
+    if (!mounted) return;
+    final collectionSlug = context
+        .read<ProductCatalogProvider>()
+        .activeCollectionFilter
+        ?.slug;
+    final shareContent = buildProductShareContent(
+      product: product,
+      collection: collectionSlug,
+    );
+
+    try {
+      final result = await SharePlus.instance.share(
+        ShareParams(
+          text: shareContent.message,
+          title: product.name,
+          subject: '${product.name} | MarketFlow',
+        ),
+      );
+      if (result.status != ShareResultStatus.unavailable) {
+        return;
+      }
+    } catch (_) {}
+
+    await Clipboard.setData(ClipboardData(text: shareContent.uri.toString()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Product link copied to clipboard')),
+    );
+  }
+
+  void _handleBackNavigation() {
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) {
+      navigator.pop();
+      return;
+    }
+    final collectionSlug = context
+        .read<ProductCatalogProvider>()
+        .activeCollectionFilter
+        ?.slug;
+    navigator.pushReplacementNamed(
+      AppRoutes.catalogRoute(collection: collectionSlug),
     );
   }
 
@@ -473,6 +589,16 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
         .where((item) => item.id != p.id)
         .take(6)
         .toList();
+    final writtenReviewCount = _ratingBreakdown.writtenReviewCount;
+    final filteredReviewEntries = filterAndSortProductReviews(
+      reviews: _reviewEntries,
+      sortOption: _reviewSortOption,
+      exactRating: _selectedReviewRating,
+      currentUserOnly: _onlyMyReviews,
+    );
+    final visibleReviewEntries = _showAllReviews
+        ? filteredReviewEntries
+        : filteredReviewEntries.take(3).toList();
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7F9),
@@ -488,8 +614,18 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
               backgroundColor: const Color(0xFFF6F7F9),
               surfaceTintColor: Colors.transparent,
               scrolledUnderElevation: 2,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                onPressed: _handleBackNavigation,
+                tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+              ),
               title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
               actions: [
+                IconButton(
+                  tooltip: 'Share product',
+                  onPressed: () => _shareProduct(p),
+                  icon: const Icon(Icons.share_outlined),
+                ),
                 FavoriteIconButton(
                   tooltip: isFavorite
                       ? 'Remove from favorites'
@@ -593,10 +729,17 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                         ),
                         Text(
                           _ratingCount == 1
-                              ? '(1 review)'
-                              : '($_ratingCount reviews)',
+                              ? '(1 rating)'
+                              : '($_ratingCount ratings)',
                           style: TextStyle(color: Colors.grey.shade700),
                         ),
+                        if (writtenReviewCount > 0)
+                          Text(
+                            writtenReviewCount == 1
+                                ? '• 1 written review'
+                                : '• $writtenReviewCount written reviews',
+                            style: TextStyle(color: Colors.grey.shade700),
+                          ),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -717,6 +860,139 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                         color: Colors.grey.shade800,
                       ),
                     ),
+                    if (!_loadingRating && _ratingFeatureAvailable) ...[
+                      const SizedBox(height: 24),
+                      const _SectionTitle("Customer Reviews"),
+                      const SizedBox(height: 8),
+                      Text(
+                        _reviewEntries.isEmpty
+                            ? 'Ratings are available, but no written reviews have been shared yet.'
+                            : 'Recent feedback from verified buyers, plus a live rating breakdown.',
+                        style: TextStyle(
+                          height: 1.45,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _RatingBreakdownCard(
+                        averageRating: _avgRating,
+                        ratingCount: _ratingCount,
+                        writtenReviewCount: writtenReviewCount,
+                        breakdown: _ratingBreakdown,
+                      ),
+                      const SizedBox(height: 12),
+                      if (_reviewEntries.isEmpty)
+                        _ReviewEmptyState(canRateProduct: _canRateProduct)
+                      else ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                  children: [
+                                    _ReviewFilterChip(
+                                      label: 'All',
+                                      selected:
+                                          _selectedReviewRating == null &&
+                                          !_onlyMyReviews,
+                                      onSelected: () {
+                                        setState(() {
+                                          _selectedReviewRating = null;
+                                          _onlyMyReviews = false;
+                                          _showAllReviews = false;
+                                        });
+                                      },
+                                    ),
+                                    _ReviewFilterChip(
+                                      label: '5 stars',
+                                      selected: _selectedReviewRating == 5,
+                                      onSelected: () {
+                                        setState(() {
+                                          _selectedReviewRating =
+                                              _selectedReviewRating == 5
+                                              ? null
+                                              : 5;
+                                          _onlyMyReviews = false;
+                                          _showAllReviews = false;
+                                        });
+                                      },
+                                    ),
+                                    _ReviewFilterChip(
+                                      label: '4 stars',
+                                      selected: _selectedReviewRating == 4,
+                                      onSelected: () {
+                                        setState(() {
+                                          _selectedReviewRating =
+                                              _selectedReviewRating == 4
+                                              ? null
+                                              : 4;
+                                          _onlyMyReviews = false;
+                                          _showAllReviews = false;
+                                        });
+                                      },
+                                    ),
+                                    if (_myRating != null)
+                                      _ReviewFilterChip(
+                                        label: 'Your review',
+                                        selected: _onlyMyReviews,
+                                        onSelected: () {
+                                          setState(() {
+                                            _onlyMyReviews = !_onlyMyReviews;
+                                            if (_onlyMyReviews) {
+                                              _selectedReviewRating = null;
+                                            }
+                                            _showAllReviews = false;
+                                          });
+                                        },
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            _ReviewSortMenu(
+                              value: _reviewSortOption,
+                              onSelected: (next) {
+                                setState(() {
+                                  _reviewSortOption = next;
+                                  _showAllReviews = false;
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        if (filteredReviewEntries.isEmpty)
+                          _FilteredReviewEmptyState(
+                            hasCurrentUserReview: _myRating != null,
+                          )
+                        else ...[
+                          ...visibleReviewEntries.map(
+                            (entry) => Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: _ReviewCard(entry: entry),
+                            ),
+                          ),
+                          if (filteredReviewEntries.length > 3)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _showAllReviews = !_showAllReviews;
+                                  });
+                                },
+                                child: Text(
+                                  _showAllReviews
+                                      ? 'Show fewer reviews'
+                                      : 'Show all ${filteredReviewEntries.length} reviews',
+                                ),
+                              ),
+                            ),
+                        ],
+                      ],
+                    ],
                     const SizedBox(height: 24),
 
                     const _SectionTitle("Select Size"),
@@ -874,13 +1150,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                             final item = recommended[index];
                             return _RecommendationCard(
                               product: item,
-                              onTap: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      ProductDetailsScreen(product: item),
-                                ),
-                              ),
+                              onTap: () => _openProductDetails(item),
                             );
                           },
                         ),
@@ -1092,6 +1362,379 @@ class _SectionTitle extends StatelessWidget {
     return Text(
       title,
       style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+    );
+  }
+}
+
+class _RatingBreakdownCard extends StatelessWidget {
+  const _RatingBreakdownCard({
+    required this.averageRating,
+    required this.ratingCount,
+    required this.writtenReviewCount,
+    required this.breakdown,
+  });
+
+  final double averageRating;
+  final int ratingCount;
+  final int writtenReviewCount;
+  final ProductRatingBreakdown breakdown;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasRatings = ratingCount > 0;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE7E8EC)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    hasRatings ? averageRating.toStringAsFixed(1) : '--',
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF173D36),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 2,
+                    children: List<Widget>.generate(5, (index) {
+                      return Icon(
+                        hasRatings && index < averageRating.round()
+                            ? Icons.star_rounded
+                            : Icons.star_outline_rounded,
+                        size: 18,
+                        color: const Color(0xFFFFB547),
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    ratingCount == 1 ? '1 rating' : '$ratingCount ratings',
+                    style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    writtenReviewCount == 1
+                        ? '1 written review'
+                        : '$writtenReviewCount written reviews',
+                    style: TextStyle(
+                      color: Colors.grey.shade600,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  children: List<Widget>.generate(5, (index) {
+                    final stars = 5 - index;
+                    return Padding(
+                      padding: EdgeInsets.only(bottom: index == 4 ? 0 : 8),
+                      child: _RatingBreakdownRow(
+                        stars: stars,
+                        count: breakdown.countFor(stars),
+                        fraction: breakdown.fractionFor(stars),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ],
+          ),
+          if (!hasRatings) ...[
+            const SizedBox(height: 12),
+            Text(
+              'No ratings yet. Buy this product to leave the first one.',
+              style: TextStyle(height: 1.4, color: Colors.grey.shade700),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RatingBreakdownRow extends StatelessWidget {
+  const _RatingBreakdownRow({
+    required this.stars,
+    required this.count,
+    required this.fraction,
+  });
+
+  final int stars;
+  final int count;
+  final double fraction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 18,
+          child: Text(
+            '$stars',
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF173D36),
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        const Icon(Icons.star_rounded, size: 14, color: Color(0xFFFFB547)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              minHeight: 9,
+              value: fraction.clamp(0, 1),
+              backgroundColor: const Color(0xFFE6ECE9),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                Color(0xFF0B7D69),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        SizedBox(
+          width: 24,
+          child: Text(
+            '$count',
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              color: Colors.grey.shade700,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReviewEmptyState extends StatelessWidget {
+  const _ReviewEmptyState({required this.canRateProduct});
+
+  final bool canRateProduct;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE7E8EC)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'No written reviews yet',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            canRateProduct
+                ? 'You can be the first buyer to share a quick review.'
+                : 'Buy this product first to unlock written reviews.',
+            style: TextStyle(height: 1.4, color: Colors.grey.shade700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilteredReviewEmptyState extends StatelessWidget {
+  const _FilteredReviewEmptyState({required this.hasCurrentUserReview});
+
+  final bool hasCurrentUserReview;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE7E8EC)),
+      ),
+      child: Text(
+        hasCurrentUserReview
+            ? 'No reviews match the current filter. Try another rating or switch back to all reviews.'
+            : 'No reviews match the current filter yet.',
+        style: TextStyle(height: 1.4, color: Colors.grey.shade700),
+      ),
+    );
+  }
+}
+
+class _ReviewFilterChip extends StatelessWidget {
+  const _ReviewFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: FilterChip(
+        label: Text(label),
+        selected: selected,
+        onSelected: (_) => onSelected(),
+      ),
+    );
+  }
+}
+
+class _ReviewSortMenu extends StatelessWidget {
+  const _ReviewSortMenu({required this.value, required this.onSelected});
+
+  final ProductReviewSortOption value;
+  final ValueChanged<ProductReviewSortOption> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<ProductReviewSortOption>(
+      onSelected: onSelected,
+      itemBuilder: (context) => ProductReviewSortOption.values
+          .map(
+            (option) => PopupMenuItem<ProductReviewSortOption>(
+              value: option,
+              child: Row(
+                children: [
+                  Expanded(child: Text(option.label)),
+                  if (option == value)
+                    Icon(
+                      Icons.check_rounded,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                ],
+              ),
+            ),
+          )
+          .toList(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFD8E6DF)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.sort_rounded, size: 18),
+            const SizedBox(width: 6),
+            Text(
+              value.label,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReviewCard extends StatelessWidget {
+  const _ReviewCard({required this.entry});
+
+  final ProductReviewEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE7E8EC)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F6F4),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  entry.isCurrentUser ? 'You' : 'Verified buyer',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF173D36),
+                  ),
+                ),
+              ),
+              const Spacer(),
+              Text(
+                formatProductReviewTimestamp(entry.updatedAt),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 2,
+            children: List<Widget>.generate(5, (index) {
+              return Icon(
+                index < entry.rating
+                    ? Icons.star_rounded
+                    : Icons.star_outline_rounded,
+                size: 18,
+                color: const Color(0xFFFFB547),
+              );
+            }),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            entry.review,
+            style: const TextStyle(height: 1.5, color: Color(0xFF1F2A26)),
+          ),
+        ],
+      ),
     );
   }
 }

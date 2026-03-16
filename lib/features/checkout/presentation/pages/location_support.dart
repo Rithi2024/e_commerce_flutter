@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:marketflow/core/location/address_text.dart';
 
 typedef LocationMessageSink = void Function(String message);
 
@@ -76,6 +77,10 @@ class LocationAddressFormatter {
       shortText: shortText,
       fullText: fullText.isNotEmpty ? fullText : shortText,
     );
+  }
+
+  static bool isResolvedDeliveryAddress(String raw) {
+    return AddressText.isDeliveryReady(raw);
   }
 }
 

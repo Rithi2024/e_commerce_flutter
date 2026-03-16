@@ -133,35 +133,38 @@ Common optional keys:
 - `BACKEND_PROXY_URL`
 - `BACKEND_DATA_PROXY_URL`
 - `BACKEND_PROXY_TIMEOUT_SECONDS`
+- `STOREFRONT_PUBLIC_URL`
 
 Notes:
 
 - `.env.example` is safe to commit.
 - `.env` is gitignored.
 - Supported runtime keys are listed in `scripts/env-keys.txt`.
+- Set `STOREFRONT_PUBLIC_URL` in production so shared product links use your public storefront domain.
 
 ## 8. Configure Google Maps API Keys
 
-Platform-local keys (not from `.env`):
+Android and iOS keys stay platform-local. Web helper builds can read the web key from `.env` or Vercel env:
 
-- Android: set `GOOGLE_MAPS_ANDROID_API_KEY` in `android/gradle.properties`
+- Android: set `GOOGLE_MAPS_ANDROID_API_KEY` in OS env or repo-root `.env` (Gradle reads OS env first, then `.env`, then `android/gradle.properties` as a legacy fallback)
 - iOS: set `GOOGLE_MAPS_IOS_API_KEY` in:
   - `ios/Flutter/Debug.xcconfig`
   - `ios/Flutter/Release.xcconfig`
-- Web: update Google Maps key in `web/index.html`
+- Web helper builds and local helper runs: set `GOOGLE_MAPS_WEB_API_KEY` in `.env` or your Vercel env
+- Direct local `flutter run -d chrome` without helpers: replace `YOUR_GOOGLE_MAPS_WEB_API_KEY` in `web/index.html`
 
 ## 9. Run the App
 
 Windows PowerShell:
 
 ```powershell
-flutter run -d chrome --dart-define-from-file=.env
+.\scripts\run-web.ps1
 ```
 
 macOS/Linux:
 
 ```bash
-flutter run -d chrome --dart-define-from-file=.env
+./scripts/run-web.sh
 ```
 
 Explicit fallback (without `.env` define file):
@@ -226,6 +229,7 @@ Vercel server env (for proxy handlers):
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY` (optional, recommended for server-side function auth)
+- `GOOGLE_MAPS_WEB_API_KEY` (required if you use the web map picker)
 
 Optional allow-lists:
 
@@ -237,8 +241,15 @@ Proxy files:
 
 - `api/supabase-function-proxy.js`
 - `api/supabase-data-proxy.js`
+- `scripts/vercel-build.sh`
 
-## 12. Verify Setup
+## 12. Configure Release Identifiers and Signing
+
+- Android application id / namespace default to `com.marketflow.app`
+- iOS bundle identifier default is `com.marketflow.app`
+- For Android release signing, copy `android/key.properties.example` to `android/key.properties` and add your keystore values
+
+## 13. Verify Setup
 
 Checklist:
 
@@ -250,7 +261,7 @@ Checklist:
 - Optional PayWay flow returns a QR payload
 - Staff/support roles can open their dashboards
 
-## 13. Common Commands
+## 14. Common Commands
 
 ```bash
 flutter analyze
@@ -258,7 +269,7 @@ flutter test
 dart format lib test
 ```
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 - `Missing SUPABASE_URL or SUPABASE_ANON_KEY`:
   set keys in `.env` and run with `--dart-define-from-file=.env`.

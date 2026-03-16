@@ -1,4 +1,5 @@
 import 'package:marketflow/features/catalog/domain/entities/product_model.dart';
+import 'package:marketflow/features/catalog/domain/entities/product_rating_summary.dart';
 
 abstract class ProductRepository {
   Future<List<Product>> fetchProducts({
@@ -13,5 +14,9 @@ abstract class ProductRepository {
   Future<Set<String>> fetchBestSellerProductIds({
     required int days,
     required int limit,
+  });
+
+  Future<Map<String, ProductRatingSummary>> fetchProductRatingSummaries({
+    required Iterable<String> productIds,
   });
 }

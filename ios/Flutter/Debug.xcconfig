@@ -1,2 +1,3 @@
 #include "Generated.xcconfig"
+APP_BUNDLE_IDENTIFIER=com.marketflow.app
 GOOGLE_MAPS_IOS_API_KEY=

@@ -5,13 +5,16 @@ import 'package:marketflow/features/wishlist/presentation/bloc/user_wishlist_pro
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:marketflow/core/widgets/app_brand_logo.dart';
+import 'package:marketflow/features/catalog/presentation/bloc/product_catalog_provider.dart';
 import 'package:marketflow/features/catalog/presentation/pages/product_catalog_screen.dart';
 import 'package:marketflow/features/wishlist/presentation/pages/wishlist_overview_screen.dart';
 import 'package:marketflow/features/cart/presentation/pages/shopping_cart_screen.dart';
 import 'package:marketflow/features/settings/presentation/pages/user_profile_screen.dart';
 
 class MainNavigationShell extends StatefulWidget {
-  const MainNavigationShell({super.key});
+  final CatalogCollectionFilter? initialCollectionFilter;
+
+  const MainNavigationShell({super.key, this.initialCollectionFilter});
 
   @override
   State<MainNavigationShell> createState() => _MainNavigationShellState();
@@ -22,17 +25,19 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   static const Color _unselectedNavIconColor = Color(0xFF53615B);
 
   int _index = 0;
-
-  static final List<Widget> _pages = <Widget>[
-    ProductCatalogScreen(),
-    WishlistOverviewScreen(),
-    ShoppingCartScreen(),
-    UserProfileScreen(),
-  ];
+  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
+    _pages = <Widget>[
+      ProductCatalogScreen(
+        initialCollectionFilter: widget.initialCollectionFilter,
+      ),
+      const WishlistOverviewScreen(),
+      const ShoppingCartScreen(),
+      const UserProfileScreen(),
+    ];
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || context.read<AuthenticationProvider>().user == null) {
         return;

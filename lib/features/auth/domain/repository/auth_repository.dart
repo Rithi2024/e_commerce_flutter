@@ -1,5 +1,6 @@
 import 'package:marketflow/features/auth/domain/entities/user_profile_model.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:typed_data';
 
 abstract class AuthRepository {
   User? currentUser();
@@ -27,6 +28,18 @@ abstract class AuthRepository {
   Future<void> confirmEmailChange({
     required String newEmail,
     required String code,
+  });
+
+  Future<void> updatePassword({
+    required String currentPassword,
+    required String newPassword,
+  });
+
+  Future<User?> updateUserMetadata({required Map<String, dynamic> data});
+
+  Future<String> uploadProfileAvatar({
+    required Uint8List bytes,
+    required String fileName,
   });
 
   Future<void> logout();

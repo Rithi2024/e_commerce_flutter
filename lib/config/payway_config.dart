@@ -1,7 +1,7 @@
 class PayWayConfig {
   static const functionName = String.fromEnvironment(
     'PAYWAY_FUNCTION_NAME',
-    defaultValue: 'Payway',
+    defaultValue: 'payway-qr',
   );
 
   static const callbackUrl = String.fromEnvironment(

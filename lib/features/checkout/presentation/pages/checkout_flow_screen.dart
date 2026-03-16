@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:marketflow/config/payway_config.dart';
 import 'package:marketflow/config/support_config.dart';
+import 'package:marketflow/core/location/address_text.dart';
 import 'package:marketflow/features/cart/domain/entities/cart_line_item.dart';
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
 import 'package:marketflow/features/settings/presentation/bloc/app_settings_provider.dart';
@@ -19,6 +20,244 @@ import 'package:marketflow/features/checkout/presentation/bloc/order_management_
 import 'package:marketflow/features/cart/presentation/bloc/shopping_cart_provider.dart';
 import 'checkout_address_selection_screen.dart';
 import 'checkout_payment_method_screen.dart';
+
+class CheckoutAddressPreviewCard extends StatelessWidget {
+  static const Color _accent = Color(0xFFF6234A);
+
+  const CheckoutAddressPreviewCard({
+    super.key,
+    required this.isPickup,
+    required this.title,
+    required this.statusLabel,
+    required this.headline,
+    required this.description,
+    required this.contactName,
+    required this.contactPhone,
+    required this.primaryLabel,
+    required this.onPrimaryAction,
+    this.onSecondaryAction,
+    this.secondaryLabel,
+    this.warningText,
+  });
+
+  final bool isPickup;
+  final String title;
+  final String statusLabel;
+  final String headline;
+  final String description;
+  final String contactName;
+  final String contactPhone;
+  final String primaryLabel;
+  final VoidCallback onPrimaryAction;
+  final VoidCallback? onSecondaryAction;
+  final String? secondaryLabel;
+  final String? warningText;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasWarning = (warningText ?? '').trim().isNotEmpty;
+    final safeSecondaryLabel = (secondaryLabel ?? '').trim();
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isPickup ? const Color(0xFFFFF7F8) : const Color(0xFFF8FAFD),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isPickup ? const Color(0xFFFFD3DD) : const Color(0xFFDCE6F4),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: isPickup
+                      ? const Color(0xFFFFE3EA)
+                      : const Color(0xFFE7EEF8),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  isPickup
+                      ? Icons.storefront_outlined
+                      : Icons.local_shipping_outlined,
+                  color: _accent,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      headline,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        height: 1.25,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: isPickup
+                      ? const Color(0xFFFFE7EC)
+                      : const Color(0xFFE8EEF8),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: TextStyle(
+                    color: isPickup
+                        ? const Color(0xFFB0304B)
+                        : const Color(0xFF295C92),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            description,
+            style: TextStyle(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.72),
+              fontSize: 13,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _CheckoutMetaChip(icon: Icons.person_outline, label: contactName),
+              _CheckoutMetaChip(
+                icon: Icons.phone_outlined,
+                label: contactPhone,
+              ),
+            ],
+          ),
+          if (hasWarning) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF0E8),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 1),
+                    child: Icon(
+                      Icons.error_outline,
+                      size: 16,
+                      color: Color(0xFFB85A00),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      warningText!,
+                      style: const TextStyle(
+                        color: Color(0xFF9B4D00),
+                        fontSize: 12,
+                        height: 1.35,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: onPrimaryAction,
+                  icon: Icon(
+                    isPickup
+                        ? Icons.map_outlined
+                        : Icons.edit_location_alt_outlined,
+                  ),
+                  label: Text(primaryLabel),
+                ),
+              ),
+              if (onSecondaryAction != null &&
+                  safeSecondaryLabel.isNotEmpty) ...[
+                const SizedBox(width: 10),
+                TextButton(
+                  onPressed: onSecondaryAction,
+                  child: Text(safeSecondaryLabel),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CheckoutMetaChip extends StatelessWidget {
+  const _CheckoutMetaChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFFE3E9F1)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: const Color(0xFF566171)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class CheckoutFlowScreen extends StatefulWidget {
   const CheckoutFlowScreen({super.key});
@@ -89,11 +328,14 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
           .loadCheckoutPrefill();
 
       if (!mounted) return;
+      final savedAddresses = AddressText.uniqueDeliveryAddresses(
+        prefill.savedAddresses,
+      );
       setState(() {
         _savedAddresses.clear();
-        _savedAddresses.addAll(prefill.savedAddresses);
-        _selectedAddress = _savedAddresses.isNotEmpty
-            ? _savedAddresses.first
+        _savedAddresses.addAll(savedAddresses);
+        _selectedAddress = savedAddresses.isNotEmpty
+            ? savedAddresses.first
             : '';
         _contactName = prefill.contactName;
         _contactPhone = prefill.contactPhone;
@@ -169,7 +411,7 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
   }
 
   bool _isDropOffAddressValid(String value) {
-    final normalized = value.trim();
+    final normalized = AddressText.deliveryAddressOrEmpty(value);
     if (normalized.isEmpty) return false;
     return !_isPickupAddressLabel(normalized);
   }
@@ -447,12 +689,24 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
       ),
     );
     if (result == null || !mounted) return;
+    final selectedAddress = AddressText.deliveryAddressOrEmpty(result.address);
+    if (selectedAddress.isEmpty) return;
     setState(() {
-      _selectedAddress = result.address;
-      if (!_savedAddresses.contains(result.address)) {
-        _savedAddresses.insert(0, result.address);
-      }
+      _selectedAddress = selectedAddress;
+      _savedAddresses.removeWhere(
+        (address) => address.toLowerCase() == selectedAddress.toLowerCase(),
+      );
+      _savedAddresses.insert(0, selectedAddress);
     });
+  }
+
+  Future<void> _editProfileForCheckout() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const UserProfileScreen()),
+    );
+    if (!mounted) return;
+    await _loadCheckoutData();
   }
 
   Future<void> _selectPaymentMethod(double total) async {
@@ -743,7 +997,9 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
     final settings = context.read<AppSettingsProvider>();
     final user = auth.user;
     final isPickup = _selectedDeliveryType == _deliveryPickup;
-    final address = isPickup ? _pickupAddressLabel : _selectedAddress.trim();
+    final address = isPickup
+        ? _pickupAddressLabel
+        : AddressText.deliveryAddressOrEmpty(_selectedAddress);
     final note = _noteController.text.trim();
     if (user == null || cart.items.isEmpty) return;
     if (!isPickup && !_isDropOffAddressValid(address)) {
@@ -760,14 +1016,7 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
           ),
           action: SnackBarAction(
             label: 'Update',
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const UserProfileScreen()),
-              );
-              if (!mounted) return;
-              await _loadCheckoutData();
-            },
+            onPressed: _editProfileForCheckout,
           ),
         ),
       );
@@ -888,7 +1137,7 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
     required ShoppingCartProvider cart,
     required AppSettingsProvider settings,
   }) {
-    final address = _selectedAddress.trim();
+    final address = AddressText.deliveryAddressOrEmpty(_selectedAddress);
     final hasValidDropOffAddress = _isDropOffAddressValid(address);
     final isPickup = _selectedDeliveryType == _deliveryPickup;
     final paymentMethodEnabled = settings.isPaymentMethodEnabled(
@@ -905,136 +1154,59 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
           ),
           const Divider(height: 1),
           if (isPickup)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-              child: Row(
-                children: [
-                  Container(
-                    width: 58,
-                    height: 58,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF0F2),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Icon(
-                      Icons.storefront_outlined,
-                      color: _accent,
-                      size: 30,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Pick up at store',
-                          style: TextStyle(
-                            fontSize: 16,
-                            height: 1.2,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'You will collect this order from our store.',
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
-                            fontSize: 14,
-                          ),
-                        ),
-                        if (!_hasRequiredPhone) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            'Phone number is required to place an order.',
-                            style: TextStyle(
-                              color: Colors.red.shade700,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                        if (SupportConfig.storeLocationUrl.trim().isNotEmpty)
-                          TextButton.icon(
-                            onPressed: _openPickupStoreLocation,
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.only(top: 8),
-                              minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                            icon: const Icon(Icons.map_outlined, size: 18),
-                            label: const Text('Open store location'),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+            CheckoutAddressPreviewCard(
+              isPickup: true,
+              title: 'Pickup details',
+              statusLabel: 'Store pickup',
+              headline: 'Collect this order from our store',
+              description:
+                  'We will prepare your order and use this contact for pickup updates.',
+              contactName: _contactName.isEmpty
+                  ? 'Add your name in Profile'
+                  : _contactName,
+              contactPhone: _contactPhone.isEmpty
+                  ? 'Add a phone number in Profile'
+                  : _contactPhone,
+              primaryLabel: SupportConfig.storeLocationUrl.trim().isNotEmpty
+                  ? 'Open store map'
+                  : 'Pickup selected',
+              onPrimaryAction: SupportConfig.storeLocationUrl.trim().isNotEmpty
+                  ? _openPickupStoreLocation
+                  : _selectDeliveryType,
+              onSecondaryAction: _selectDeliveryType,
+              secondaryLabel: 'Change method',
+              warningText: !_hasRequiredPhone
+                  ? 'Phone number is required before you can place a pickup order.'
+                  : null,
             )
           else
-            InkWell(
-              onTap: _selectAddress,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 58,
-                      height: 58,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF0F2),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Icon(
-                        Icons.location_on_outlined,
-                        color: _accent,
-                        size: 30,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            hasValidDropOffAddress
-                                ? address
-                                : 'Select your address',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              height: 1.2,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          if (_contactName.isNotEmpty ||
-                              _contactPhone.isNotEmpty) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              '${_contactName.isEmpty ? 'Contact' : _contactName}, ${_contactPhone.isEmpty ? '-' : _contactPhone}',
-                              style: TextStyle(
-                                color: Colors.grey.shade600,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                          if (!_hasRequiredPhone) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              'Phone number is required to place an order.',
-                              style: TextStyle(
-                                color: Colors.red.shade700,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const Icon(Icons.chevron_right_rounded, size: 30),
-                  ],
-                ),
-              ),
+            CheckoutAddressPreviewCard(
+              isPickup: false,
+              title: 'Delivery details',
+              statusLabel: hasValidDropOffAddress
+                  ? 'Ready to deliver'
+                  : 'Address needed',
+              headline: hasValidDropOffAddress
+                  ? address
+                  : 'Choose a delivery address',
+              description: hasValidDropOffAddress
+                  ? 'This address and contact will be used for delivery updates and handoff.'
+                  : 'Pick a saved address, current location, or map pin before placing your order.',
+              contactName: _contactName.isEmpty
+                  ? 'Add your name in Profile'
+                  : _contactName,
+              contactPhone: _contactPhone.isEmpty
+                  ? 'Add a phone number in Profile'
+                  : _contactPhone,
+              primaryLabel: hasValidDropOffAddress
+                  ? 'Change address'
+                  : 'Choose address',
+              onPrimaryAction: _selectAddress,
+              onSecondaryAction: _editProfileForCheckout,
+              secondaryLabel: 'Edit profile',
+              warningText: !_hasRequiredPhone
+                  ? 'Phone number is required before you can place a delivery order.'
+                  : null,
             ),
           const Divider(height: 1),
           _lineItem(
@@ -1399,6 +1571,41 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
     );
   }
 
+  Widget _bottomTotalSummary(
+    AppSettingsProvider settings,
+    double payableTotal, {
+    bool centered = false,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: centered
+          ? CrossAxisAlignment.center
+          : CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Total',
+          textAlign: centered ? TextAlign.center : TextAlign.start,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.72),
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.3,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          settings.formatUsd(payableTotal),
+          textAlign: centered ? TextAlign.center : TextAlign.start,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cart = context.watch<ShoppingCartProvider>();
@@ -1466,14 +1673,10 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
                                 horizontal: 6,
                                 vertical: 4,
                               ),
-                              child: Text(
-                                'Total: ${settings.formatUsd(payableTotal)}',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                              child: _bottomTotalSummary(
+                                settings,
+                                payableTotal,
+                                centered: true,
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -1497,7 +1700,7 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
                                       )
                                     : const Text(
                                         'Order',
-                                        style: TextStyle(fontSize: 18),
+                                        style: TextStyle(fontSize: 16),
                                       ),
                               ),
                             ),
@@ -1513,13 +1716,9 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 18,
                                 ),
-                                child: Text(
-                                  'Total: ${settings.formatUsd(payableTotal)}',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                                child: _bottomTotalSummary(
+                                  settings,
+                                  payableTotal,
                                 ),
                               ),
                             ),
@@ -1544,7 +1743,7 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
                                       )
                                     : const Text(
                                         'Order',
-                                        style: TextStyle(fontSize: 18),
+                                        style: TextStyle(fontSize: 16),
                                       ),
                               ),
                             ),

@@ -1,4 +1,5 @@
 import 'package:marketflow/features/catalog/domain/entities/product_model.dart';
+import 'package:marketflow/features/catalog/domain/entities/product_rating_summary.dart';
 import 'package:marketflow/features/catalog/domain/repository/product_repository.dart';
 import 'package:marketflow/core/network/local_cache_service.dart';
 import 'package:marketflow/core/network/supabase_data_proxy.dart';
@@ -142,6 +143,81 @@ class SupabaseProductRepository implements ProductRepository {
     } catch (_) {
       if (staleCache != null) {
         return staleCache;
+      }
+      rethrow;
+    }
+  }
+
+  @override
+  Future<Map<String, ProductRatingSummary>> fetchProductRatingSummaries({
+    required Iterable<String> productIds,
+  }) async {
+    final ids = productIds
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList();
+    if (ids.isEmpty) {
+      return const <String, ProductRatingSummary>{};
+    }
+
+    try {
+      final results = await Future.wait(
+        ids.map((productId) async {
+          final rows = await _dataProxy.select(
+            table: 'product_ratings',
+            columns: 'rating,review',
+            filters: <DataProxyFilter>[
+              DataProxyFilter.eq('product_id', productId),
+            ],
+          );
+          final normalizedRows = rows
+              .whereType<Map>()
+              .map((raw) => Map<String, dynamic>.from(raw))
+              .toList();
+          final ratings = normalizedRows
+              .map((row) => (row['rating'] as num?)?.toInt() ?? 0)
+              .where((value) => value >= 1 && value <= 5)
+              .toList();
+          final reviewCount = normalizedRows
+              .map((row) => (row['review'] ?? '').toString().trim())
+              .where((value) => value.isNotEmpty)
+              .length;
+          if (ratings.isEmpty) {
+            return MapEntry<String, ProductRatingSummary>(
+              productId,
+              ProductRatingSummary(
+                ratingCount: 0,
+                averageRating: 0,
+                reviewCount: reviewCount,
+              ),
+            );
+          }
+          final total = ratings.fold<int>(0, (sum, value) => sum + value);
+          return MapEntry<String, ProductRatingSummary>(
+            productId,
+            ProductRatingSummary(
+              ratingCount: ratings.length,
+              averageRating: total / ratings.length,
+              reviewCount: reviewCount,
+            ),
+          );
+        }),
+      );
+
+      return <String, ProductRatingSummary>{
+        for (final entry in results) entry.key: entry.value,
+      };
+    } on PostgrestException catch (error) {
+      if (_isMissingRatingTable(error)) {
+        return <String, ProductRatingSummary>{
+          for (final productId in ids)
+            productId: const ProductRatingSummary(
+              ratingCount: 0,
+              averageRating: 0,
+              reviewCount: 0,
+            ),
+        };
       }
       rethrow;
     }
@@ -318,5 +394,13 @@ class SupabaseProductRepository implements ProductRepository {
 
   String _safe(String value) {
     return Uri.encodeComponent(value.trim().toLowerCase());
+  }
+
+  bool _isMissingRatingTable(PostgrestException error) {
+    final code = (error.code ?? '').trim().toUpperCase();
+    final message = error.message.toLowerCase();
+    return code == '42P01' ||
+        message.contains('product_ratings') ||
+        message.contains('relation') && message.contains('does not exist');
   }
 }

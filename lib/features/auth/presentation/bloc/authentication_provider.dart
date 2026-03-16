@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:marketflow/core/auth/account_role.dart';
 import 'package:marketflow/features/auth/domain/entities/user_profile_model.dart';
@@ -247,6 +248,71 @@ class AuthenticationProvider extends ChangeNotifier {
         action: 'confirm_email_change',
         message: error.toString(),
         metadata: {'newEmail': cleanEmail, 'userId': user?.id},
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> updatePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    try {
+      await _useCases.updatePassword(
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+      user = _useCases.currentUser();
+      notifyListeners();
+      _logInfo(action: 'update_password', metadata: {'userId': user?.id});
+    } catch (error) {
+      _logError(
+        action: 'update_password',
+        message: error.toString(),
+        metadata: {'userId': user?.id},
+      );
+      rethrow;
+    }
+  }
+
+  Future<User?> updateUserMetadata({required Map<String, dynamic> data}) async {
+    try {
+      user = await _useCases.updateUserMetadata(data: data) ?? user;
+      notifyListeners();
+      _logInfo(
+        action: 'update_user_metadata',
+        metadata: {'keys': data.keys.toList(), 'userId': user?.id},
+      );
+      return user;
+    } catch (error) {
+      _logError(
+        action: 'update_user_metadata',
+        message: error.toString(),
+        metadata: {'keys': data.keys.toList(), 'userId': user?.id},
+      );
+      rethrow;
+    }
+  }
+
+  Future<String> uploadProfileAvatar({
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    try {
+      final url = await _useCases.uploadProfileAvatar(
+        bytes: bytes,
+        fileName: fileName,
+      );
+      _logInfo(
+        action: 'upload_profile_avatar',
+        metadata: {'userId': user?.id, 'fileName': fileName},
+      );
+      return url;
+    } catch (error) {
+      _logError(
+        action: 'upload_profile_avatar',
+        message: error.toString(),
+        metadata: {'userId': user?.id, 'fileName': fileName},
       );
       rethrow;
     }

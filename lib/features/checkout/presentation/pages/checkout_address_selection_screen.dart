@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:marketflow/core/location/address_text.dart';
 
 import 'address_map_picker_screen.dart';
 import 'location_support.dart';
@@ -42,12 +43,12 @@ class _CheckoutAddressSelectionScreenState
   @override
   void initState() {
     super.initState();
-    _historyAddresses = widget.historyAddresses
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toSet()
-        .toList();
-    _selectedAddress = widget.selectedAddress.trim();
+    _historyAddresses = AddressText.uniqueDeliveryAddresses(
+      widget.historyAddresses,
+    );
+    _selectedAddress = AddressText.deliveryAddressOrEmpty(
+      widget.selectedAddress,
+    );
   }
 
   @override
@@ -63,8 +64,11 @@ class _CheckoutAddressSelectionScreenState
   }
 
   void _confirmSelection(String address) {
-    final normalized = address.trim();
-    if (normalized.isEmpty) return;
+    final normalized = AddressText.deliveryAddressOrEmpty(address);
+    if (normalized.isEmpty) {
+      _showMessage('Please choose a resolved delivery address');
+      return;
+    }
     Navigator.pop(context, CheckoutAddressSelectionResult(address: normalized));
   }
 
@@ -100,6 +104,12 @@ class _CheckoutAddressSelectionScreenState
         longitude: position.longitude,
       );
       if (!mounted) return;
+      if (address.isEmpty) {
+        _showMessage(
+          'We could not resolve a delivery address here. Try the map instead.',
+        );
+        return;
+      }
       _confirmSelection(address);
     } catch (_) {
       _showMessage('Could not get current location');
@@ -123,13 +133,14 @@ class _CheckoutAddressSelectionScreenState
           latitude: latitude,
           longitude: longitude,
         );
-        if (addressText.fullText.trim().isNotEmpty) return addressText.fullText;
+        if (LocationAddressFormatter.isResolvedDeliveryAddress(
+          addressText.fullText,
+        )) {
+          return addressText.fullText;
+        }
       }
     } catch (_) {}
-    return LocationAddressFormatter.coordinateText(
-      latitude: latitude,
-      longitude: longitude,
-    );
+    return '';
   }
 
   void _showMessage(String text) {
@@ -234,7 +245,9 @@ class _CheckoutAddressSelectionScreenState
   @override
   Widget build(BuildContext context) {
     final compactHeader = MediaQuery.sizeOf(context).width < 390;
-    final selectedAddress = _selectedAddress.trim();
+    final selectedAddress = AddressText.deliveryAddressOrEmpty(
+      _selectedAddress,
+    );
     final myAddresses = selectedAddress.isEmpty
         ? const <String>[]
         : <String>[selectedAddress];

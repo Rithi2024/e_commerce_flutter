@@ -76,10 +76,16 @@ cp .env.example .env
 Windows PowerShell:
 
 ```powershell
-flutter run -d chrome --dart-define-from-file=.env
+.\scripts\run-web.ps1
 ```
 
 macOS/Linux:
+
+```bash
+./scripts/run-web.sh
+```
+
+Fallback without helpers:
 
 ```bash
 flutter run -d chrome --dart-define-from-file=.env
@@ -87,7 +93,7 @@ flutter run -d chrome --dart-define-from-file=.env
 
 ## Runtime Config Keys
 
-`.env.example` contains all supported keys. Keys are centrally listed in `scripts/env-keys.txt` and used by local run scripts and Vercel build script.
+`.env.example` contains all supported keys. Keys are centrally listed in `scripts/env-keys.txt` and used by the helper scripts and Vercel build script.
 
 Required:
 
@@ -96,22 +102,24 @@ Required:
 
 Common optional:
 
-- `AUTH_EMAIL_FUNCTION_NAME` (default: `Resend-email`)
-- `PAYWAY_FUNCTION_NAME` (default: `Payway`)
+- `AUTH_EMAIL_FUNCTION_NAME` (default: `resend-email`)
+- `PAYWAY_FUNCTION_NAME` (default: `payway-qr`)
 - `PAYWAY_CALLBACK_URL`
 - `PAYWAY_CURRENCY` (default: `USD`)
 - `PAYWAY_QR_TEMPLATE` (default: `template3_color`)
 - `PAYWAY_QR_LIFETIME_MINUTES` (default: `15`)
 - `SUPPORT_EMAIL`, `SUPPORT_PHONE`, support social/contact links
 - `BACKEND_PROXY_URL`, `BACKEND_DATA_PROXY_URL`, `BACKEND_PROXY_TIMEOUT_SECONDS`
+- `STOREFRONT_PUBLIC_URL` for shared product links on native/web (recommended for production)
 
 ## Google Maps Keys
 
-These are platform-local, not in `.env`:
+Android and iOS keys stay platform-local. Web helper builds can read the web key from `.env` or Vercel env:
 
-- Android: `android/gradle.properties` -> `GOOGLE_MAPS_ANDROID_API_KEY`
+- Android: set `GOOGLE_MAPS_ANDROID_API_KEY` in OS env or repo-root `.env` (Gradle reads OS env first, then `.env`, then `android/gradle.properties` as a legacy fallback)
 - iOS: `ios/Flutter/Debug.xcconfig` and `ios/Flutter/Release.xcconfig` -> `GOOGLE_MAPS_IOS_API_KEY`
-- Web: `web/index.html` script tag -> `YOUR_GOOGLE_MAPS_WEB_API_KEY`
+- Web helper builds and local helper runs: set `GOOGLE_MAPS_WEB_API_KEY` in `.env` or your Vercel project env
+- Direct local `flutter run -d chrome` without helpers: replace `YOUR_GOOGLE_MAPS_WEB_API_KEY` in `web/index.html`
 
 ## Role Routing
 
@@ -124,7 +132,9 @@ These are platform-local, not in `.env`:
 1. Import the repository in Vercel.
 2. `vercel.json` uses `bash ./scripts/vercel-build.sh` and outputs `build/web`.
 3. Set Vercel project environment variables for all required runtime keys (same names as `.env.example`).
-4. Redeploy after env changes.
+4. If you use the map picker on web, also set `GOOGLE_MAPS_WEB_API_KEY`.
+5. Set `STOREFRONT_PUBLIC_URL` to your public site URL so shared product links point to production.
+6. Redeploy after env changes.
 
 For backend proxy mode, add:
 
@@ -132,6 +142,12 @@ For backend proxy mode, add:
 - `BACKEND_DATA_PROXY_URL=/api/supabase-data-proxy`
 - `SUPABASE_SERVICE_ROLE_KEY` (optional but recommended for server-side proxy calls)
 - Optional allow-lists: `PROXY_ALLOWED_FUNCTIONS`, `PROXY_ALLOWED_RPCS`, `PROXY_ALLOWED_TABLES`
+
+## Release Setup
+
+- Android release signing: copy `android/key.properties.example` to `android/key.properties` and fill in your keystore values
+- Android application id / namespace default: `com.marketflow.app`
+- iOS bundle identifier default: `com.marketflow.app`
 
 ## Developer Commands
 

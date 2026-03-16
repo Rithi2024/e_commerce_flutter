@@ -41,6 +41,10 @@ class _AddressMapPickerScreenState extends State<AddressMapPickerScreen> {
   bool _skipNextCameraIdle = false;
   Timer? _resolveDebounce;
 
+  bool get _hasResolvedAddress =>
+      LocationAddressFormatter.isResolvedDeliveryAddress(_resolvedAddress) ||
+      LocationAddressFormatter.isResolvedDeliveryAddress(_shortAddress);
+
   @override
   void initState() {
     super.initState();
@@ -198,9 +202,21 @@ class _AddressMapPickerScreenState extends State<AddressMapPickerScreen> {
           longitude: point.longitude,
         );
         if (!mounted || token != _resolveToken) return;
+        final resolvedFull =
+            LocationAddressFormatter.isResolvedDeliveryAddress(
+              addressText.fullText,
+            )
+            ? addressText.fullText
+            : '';
+        final resolvedShort =
+            LocationAddressFormatter.isResolvedDeliveryAddress(
+              addressText.shortText,
+            )
+            ? addressText.shortText
+            : '';
         setState(() {
-          _shortAddress = addressText.shortText;
-          _resolvedAddress = addressText.fullText;
+          _shortAddress = resolvedShort;
+          _resolvedAddress = resolvedFull;
           _lastResolvedPoint = point;
           _loadingAddress = false;
         });
@@ -210,14 +226,8 @@ class _AddressMapPickerScreenState extends State<AddressMapPickerScreen> {
 
     if (!mounted || token != _resolveToken) return;
     setState(() {
-      final fallback = _resolvedAddress.trim().isNotEmpty
-          ? _resolvedAddress
-          : LocationAddressFormatter.coordinateText(
-              latitude: point.latitude,
-              longitude: point.longitude,
-            );
-      _shortAddress = fallback;
-      _resolvedAddress = fallback;
+      _shortAddress = '';
+      _resolvedAddress = '';
       _lastResolvedPoint = point;
       _loadingAddress = false;
     });
@@ -236,12 +246,13 @@ class _AddressMapPickerScreenState extends State<AddressMapPickerScreen> {
 
     final address = _resolvedAddress.trim().isNotEmpty
         ? _resolvedAddress.trim()
-        : (_shortAddress.trim().isNotEmpty
-              ? _shortAddress.trim()
-              : LocationAddressFormatter.coordinateText(
-                  latitude: _selected.latitude,
-                  longitude: _selected.longitude,
-                ));
+        : (_shortAddress.trim().isNotEmpty ? _shortAddress.trim() : '');
+    if (!LocationAddressFormatter.isResolvedDeliveryAddress(address)) {
+      _showMessage(
+        'Move the pin a little more until we can resolve a delivery address.',
+      );
+      return;
+    }
 
     Navigator.pop(
       context,
@@ -352,16 +363,26 @@ class _AddressMapPickerScreenState extends State<AddressMapPickerScreen> {
                     )
                   else
                     Text(
-                      (_shortAddress.isEmpty ? _resolvedAddress : _shortAddress)
-                          .trim(),
+                      _hasResolvedAddress
+                          ? (_shortAddress.isEmpty
+                                    ? _resolvedAddress
+                                    : _shortAddress)
+                                .trim()
+                          : 'We could not match this pin to a delivery address yet.',
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: theme.colorScheme.onSurface,
+                        color: _hasResolvedAddress
+                            ? theme.colorScheme.onSurface
+                            : const Color(0xFF9B4D00),
                         fontSize: 13,
+                        fontWeight: _hasResolvedAddress
+                            ? FontWeight.w400
+                            : FontWeight.w600,
                       ),
                     ),
                   if (!_loadingAddress &&
+                      _hasResolvedAddress &&
                       _resolvedAddress.isNotEmpty &&
                       _resolvedAddress != _shortAddress) ...[
                     const SizedBox(height: 6),
@@ -379,7 +400,9 @@ class _AddressMapPickerScreenState extends State<AddressMapPickerScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: _loadingAddress ? null : _chooseThisLocation,
+                      onPressed: _loadingAddress || !_hasResolvedAddress
+                          ? null
+                          : _chooseThisLocation,
                       icon: const Icon(Icons.check_circle_outline),
                       label: const Text('Use This Address'),
                     ),

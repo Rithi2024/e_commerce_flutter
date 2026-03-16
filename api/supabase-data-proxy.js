@@ -21,6 +21,7 @@ const DEFAULT_ALLOWED_RPCS = [
   'rpc_admin_set_account_type',
   'rpc_admin_list_orders',
   'rpc_staff_update_order_status',
+  'rpc_staff_reply_product_rating',
   'rpc_admin_confirm_cash_payment',
   'rpc_staff_list_support_requests',
   'rpc_admin_list_events',

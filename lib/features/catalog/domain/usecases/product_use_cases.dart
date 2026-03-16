@@ -1,4 +1,5 @@
 import 'package:marketflow/features/catalog/domain/entities/product_model.dart';
+import 'package:marketflow/features/catalog/domain/entities/product_rating_summary.dart';
 import 'package:marketflow/features/catalog/domain/repository/product_repository.dart';
 
 class ProductUseCases {
@@ -26,5 +27,11 @@ class ProductUseCases {
     int limit = 5,
   }) {
     return _repository.fetchBestSellerProductIds(days: days, limit: limit);
+  }
+
+  Future<Map<String, ProductRatingSummary>> fetchProductRatingSummaries({
+    required Iterable<String> productIds,
+  }) {
+    return _repository.fetchProductRatingSummaries(productIds: productIds);
   }
 }
