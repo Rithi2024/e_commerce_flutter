@@ -159,6 +159,21 @@ ensure_flutter() {
   FLUTTER_BIN="${flutter_sdk_dir}/bin/flutter"
 }
 
+configure_flutter_git_safety() {
+  local flutter_sdk_dir
+
+  if [[ -z "${FLUTTER_BIN}" ]]; then
+    return 0
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+
+  flutter_sdk_dir="$(cd "$(dirname "${FLUTTER_BIN}")/.." && pwd)"
+  git config --global --add safe.directory "${flutter_sdk_dir}" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   rm -f "${GENERATED_ENV_FILE}"
   if [[ -f "${WEB_INDEX_BACKUP}" ]]; then
@@ -186,6 +201,7 @@ require_non_placeholder "SUPABASE_URL" "https://YOUR_PROJECT.supabase.co"
 require_non_placeholder "SUPABASE_ANON_KEY" "YOUR_ANON_KEY"
 
 ensure_flutter
+configure_flutter_git_safety
 
 write_build_env_file
 
