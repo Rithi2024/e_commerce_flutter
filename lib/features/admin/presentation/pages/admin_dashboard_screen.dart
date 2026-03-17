@@ -216,8 +216,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final current = _deliveryStageStatus(order.status);
     final delivery = order.deliveryType.trim().toLowerCase();
     final isPickup = delivery == 'real_meeting' || delivery == 'pickup';
+    final hasDeliveryAddress = order.address.trim().isNotEmpty;
 
     if (riderOnly) {
+      if (!isPickup && !hasDeliveryAddress) {
+        return null;
+      }
       if (current == 'order_received' || current == 'order_packed') {
         return 'out_for_delivery';
       }

@@ -12,7 +12,12 @@ import 'package:flutter_test/flutter_test.dart';
 class _FakeAdminRepository implements AdminRepository {
   int listProductsCalls = 0;
   int createProductCalls = 0;
+  int updateOrderAddressCalls = 0;
+  int updateSupportRequestStatusCalls = 0;
   String? lastProductQuery;
+  String? lastOrderAddress;
+  String? lastSupportRequestStatus;
+  String? lastSupportRequestNote;
 
   @override
   Future<Result<AdminProfile?>> getProfile() async {
@@ -76,6 +81,17 @@ class _FakeAdminRepository implements AdminRepository {
   }
 
   @override
+  Future<Result<void>> updateOrderAddress({
+    required int orderId,
+    required String address,
+    required String addressDetails,
+  }) async {
+    updateOrderAddressCalls++;
+    lastOrderAddress = address;
+    return const Success<void>(null);
+  }
+
+  @override
   Future<Result<void>> confirmCashPayment({required int orderId}) async {
     return const Success<void>(null);
   }
@@ -83,6 +99,18 @@ class _FakeAdminRepository implements AdminRepository {
   @override
   Future<Result<List<AdminSupportRequest>>> listSupportRequests() async {
     return const Success<List<AdminSupportRequest>>(<AdminSupportRequest>[]);
+  }
+
+  @override
+  Future<Result<void>> updateSupportRequestStatus({
+    required int requestId,
+    required String status,
+    String? note,
+  }) async {
+    updateSupportRequestStatusCalls++;
+    lastSupportRequestStatus = status;
+    lastSupportRequestNote = note;
+    return const Success<void>(null);
   }
 
   @override
@@ -208,5 +236,71 @@ void main() {
 
     expect(result.isFailure, true);
     expect(result.requireFailure, isA<ValidationFailure>());
+  });
+
+  test(
+    'AdminUseCases validates updated order address before repository call',
+    () async {
+      final repo = _FakeAdminRepository();
+      final useCases = AdminUseCases(repo);
+
+      final result = await useCases.updateOrderAddress(
+        orderId: 3,
+        address: ' ',
+        addressDetails: '',
+      );
+
+      expect(result.isFailure, true);
+      expect(result.requireFailure, isA<ValidationFailure>());
+      expect(repo.updateOrderAddressCalls, 0);
+    },
+  );
+
+  test('AdminUseCases delegates order address updates', () async {
+    final repo = _FakeAdminRepository();
+    final useCases = AdminUseCases(repo);
+
+    final result = await useCases.updateOrderAddress(
+      orderId: 3,
+      address: ' 56b Saint 143, Phnom Penh ',
+      addressDetails: 'ASAP',
+    );
+
+    expect(result.isSuccess, true);
+    expect(repo.updateOrderAddressCalls, 1);
+    expect(repo.lastOrderAddress, '56b Saint 143, Phnom Penh');
+  });
+
+  test(
+    'AdminUseCases validates support request status before repository call',
+    () async {
+      final repo = _FakeAdminRepository();
+      final useCases = AdminUseCases(repo);
+
+      final result = await useCases.updateSupportRequestStatus(
+        requestId: 9,
+        status: 'done',
+      );
+
+      expect(result.isFailure, true);
+      expect(result.requireFailure, isA<ValidationFailure>());
+      expect(repo.updateSupportRequestStatusCalls, 0);
+    },
+  );
+
+  test('AdminUseCases delegates support request status updates', () async {
+    final repo = _FakeAdminRepository();
+    final useCases = AdminUseCases(repo);
+
+    final result = await useCases.updateSupportRequestStatus(
+      requestId: 9,
+      status: 'resolved',
+      note: 'Your request has been resolved.',
+    );
+
+    expect(result.isSuccess, true);
+    expect(repo.updateSupportRequestStatusCalls, 1);
+    expect(repo.lastSupportRequestStatus, 'resolved');
+    expect(repo.lastSupportRequestNote, 'Your request has been resolved.');
   });
 }

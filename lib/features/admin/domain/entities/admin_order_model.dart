@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:marketflow/core/location/address_text.dart';
+
 class AdminOrderItem {
   final String productId;
   final String name;
@@ -95,7 +97,9 @@ class AdminOrder {
       userId: (data['user_id'] ?? '').toString(),
       email: (data['email'] ?? '').toString(),
       total: (data['total'] as num?)?.toDouble() ?? 0,
-      address: (data['address'] ?? '').toString(),
+      address: AddressText.deliveryAddressOrEmpty(
+        (data['address'] ?? '').toString(),
+      ),
       addressDetails: (data['address_details'] ?? '').toString(),
       deliveryType: (data['delivery_type'] ?? 'drop_off').toString(),
       paymentMethod: (data['payment_method'] ?? 'cash_on_delivery').toString(),

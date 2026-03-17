@@ -11,6 +11,7 @@ For full onboarding and environment setup, use [SETUP.md](SETUP.md).
 - Payment flows: Cash on Delivery and ABA PayWay QR
 - Profile management with map-based address picker
 - Customer support chat and dedicated support dashboard
+- Support-agent recovery flow for blocked delivery orders with address updates
 - Staff dashboard for products, users, orders, events, and support requests
 - Role model: `customer`, `support_agent`, `delivery`, `cashier`, `staff`, `super_admin`
 - Optional backend proxy path for Vercel/web deployments
@@ -31,6 +32,8 @@ flutter pub get
 ```
 
 2. Run `supabase/schema.sql` in your Supabase SQL Editor.
+
+This schema includes the staff/support RPCs used by the latest order recovery flow, including support-side address updates from the support desk.
 
 Optional seed data: `supabase/seed_fake_products.sql`.
 
@@ -127,14 +130,29 @@ Android and iOS keys stay platform-local. Web helper builds can read the web key
 - `/staff`: `staff`, `cashier`, `delivery`, `super_admin`
 - `/admin`: legacy alias of `/staff`
 
+## Support Recovery Flow
+
+When a customer order is blocked because the saved delivery address is missing or invalid:
+
+- The customer order history screen shows `Update saved address` and `Contact support`
+- The support desk can open the linked order directly from the support request
+- Support agents can apply the customer-provided updated address from the linked order sheet
+- Support requests now move through `Pending`, `Address applied`, and `Resolved`
+
+Important:
+
+- The live support-side `Apply updated address` action requires the latest `supabase/schema.sql`
+- If the SQL migration has not been applied yet, the app UI will build, but the new address update RPC will not exist in Supabase
+
 ## Deploy to Vercel
 
 1. Import the repository in Vercel.
 2. `vercel.json` uses `bash ./scripts/vercel-build.sh` and outputs `build/web`.
-3. Set Vercel project environment variables for all required runtime keys (same names as `.env.example`).
-4. If you use the map picker on web, also set `GOOGLE_MAPS_WEB_API_KEY`.
-5. Set `STOREFRONT_PUBLIC_URL` to your public site URL so shared product links point to production.
-6. Redeploy after env changes.
+3. The build script now bootstraps Flutter automatically on Linux/Vercel if `flutter` is not already on PATH. It defaults to the version in `scripts/flutter-version.txt`, and you can override that with a Vercel env var named `FLUTTER_VERSION`.
+4. Set Vercel project environment variables for all required runtime keys (same names as `.env.example`).
+5. If you use the map picker on web, also set `GOOGLE_MAPS_WEB_API_KEY`.
+6. Set `STOREFRONT_PUBLIC_URL` to your public site URL so shared product links point to production.
+7. Redeploy after env changes.
 
 For backend proxy mode, add:
 

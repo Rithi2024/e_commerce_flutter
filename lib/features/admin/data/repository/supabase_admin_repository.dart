@@ -148,6 +148,30 @@ class SupabaseAdminRepository implements AdminRepository {
   }
 
   @override
+  Future<Result<void>> updateOrderAddress({
+    required int orderId,
+    required String address,
+    required String addressDetails,
+  }) async {
+    try {
+      await _service.updateOrderAddress(
+        orderId: orderId,
+        address: address,
+        addressDetails: addressDetails,
+      );
+      return const Success<void>(null);
+    } catch (error, stackTrace) {
+      return FailureResult<void>(
+        mapDataExceptionToFailure(
+          error,
+          stackTrace,
+          fallbackMessage: 'Failed to update order address',
+        ),
+      );
+    }
+  }
+
+  @override
   Future<Result<void>> confirmCashPayment({required int orderId}) async {
     try {
       await _service.confirmCashPayment(orderId: orderId);
@@ -181,6 +205,30 @@ class SupabaseAdminRepository implements AdminRepository {
           error,
           stackTrace,
           fallbackMessage: 'Failed to load support requests',
+        ),
+      );
+    }
+  }
+
+  @override
+  Future<Result<void>> updateSupportRequestStatus({
+    required int requestId,
+    required String status,
+    String? note,
+  }) async {
+    try {
+      await _service.updateSupportRequestStatus(
+        requestId: requestId,
+        status: status,
+        note: note,
+      );
+      return const Success<void>(null);
+    } catch (error, stackTrace) {
+      return FailureResult<void>(
+        mapDataExceptionToFailure(
+          error,
+          stackTrace,
+          fallbackMessage: 'Failed to update support request status',
         ),
       );
     }

@@ -31,6 +31,11 @@ flutter pub get
 2. Go to SQL Editor.
 3. Run `supabase/schema.sql`.
 
+Notes:
+
+- Re-run the latest `supabase/schema.sql` after pulling backend changes from the repo.
+- The current schema includes support-desk order recovery RPCs, including support-side delivery address updates.
+
 Optional seed data:
 
 - Run `supabase/seed_fake_products.sql`.
@@ -242,6 +247,13 @@ Proxy files:
 - `api/supabase-function-proxy.js`
 - `api/supabase-data-proxy.js`
 - `scripts/vercel-build.sh`
+- `scripts/flutter-version.txt`
+
+Vercel note:
+
+- `scripts/vercel-build.sh` now bootstraps Flutter automatically when `flutter` is missing from PATH in Linux CI
+- Default CI Flutter version comes from `scripts/flutter-version.txt`
+- You can override that version in Vercel with `FLUTTER_VERSION`
 
 ## 12. Configure Release Identifiers and Signing
 
@@ -260,6 +272,10 @@ Checklist:
 - Cart and checkout complete using Cash on Delivery
 - Optional PayWay flow returns a QR payload
 - Staff/support roles can open their dashboards
+- Blocked delivery orders show recovery actions in customer order history
+- Support-agent dashboard can open a linked recovery order from a support request
+- Support-agent dashboard can apply a customer-provided updated delivery address after the latest schema is applied
+- Support-agent dashboard can move requests through `Pending`, `Address applied`, and `Resolved`
 
 ## 14. Common Commands
 
@@ -281,3 +297,5 @@ dart format lib test
   grant runtime location permission.
 - Staff/support routes unavailable:
   ensure `public.profiles.account_type` is set correctly.
+- Support desk can open linked orders but `Apply updated address` fails:
+  run the latest `supabase/schema.sql` so `rpc_staff_update_order_address` exists in Supabase.

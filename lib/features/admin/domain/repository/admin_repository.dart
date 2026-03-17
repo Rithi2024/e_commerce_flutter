@@ -26,9 +26,21 @@ abstract class AdminRepository {
     required String status,
   });
 
+  Future<Result<void>> updateOrderAddress({
+    required int orderId,
+    required String address,
+    required String addressDetails,
+  });
+
   Future<Result<void>> confirmCashPayment({required int orderId});
 
   Future<Result<List<AdminSupportRequest>>> listSupportRequests();
+
+  Future<Result<void>> updateSupportRequestStatus({
+    required int requestId,
+    required String status,
+    String? note,
+  });
 
   Future<Result<List<AdminEvent>>> listEvents();
 

@@ -22,9 +22,21 @@ abstract class AdminDataSource {
     required String status,
   });
 
+  Future<void> updateOrderAddress({
+    required int orderId,
+    required String address,
+    required String addressDetails,
+  });
+
   Future<void> confirmCashPayment({required int orderId});
 
   Future<List<dynamic>> listSupportRequests();
+
+  Future<void> updateSupportRequestStatus({
+    required int requestId,
+    required String status,
+    String? note,
+  });
 
   Future<List<dynamic>> listEvents();
 
@@ -197,6 +209,22 @@ class AdminService implements AdminDataSource {
   }
 
   @override
+  Future<void> updateOrderAddress({
+    required int orderId,
+    required String address,
+    required String addressDetails,
+  }) {
+    return _dataProxy.rpc(
+      'rpc_staff_update_order_address',
+      params: {
+        'p_order_id': orderId,
+        'p_address': address,
+        'p_address_details': addressDetails,
+      },
+    );
+  }
+
+  @override
   Future<void> confirmCashPayment({required int orderId}) {
     return _dataProxy.rpc(
       'rpc_admin_confirm_cash_payment',
@@ -208,6 +236,22 @@ class AdminService implements AdminDataSource {
   Future<List<dynamic>> listSupportRequests() async {
     final rows = await _dataProxy.rpc('rpc_staff_list_support_requests');
     return rows as List<dynamic>;
+  }
+
+  @override
+  Future<void> updateSupportRequestStatus({
+    required int requestId,
+    required String status,
+    String? note,
+  }) {
+    return _dataProxy.rpc(
+      'rpc_staff_update_support_request_status',
+      params: {
+        'p_request_id': requestId,
+        'p_status': status,
+        ...?note == null ? null : <String, dynamic>{'p_note': note},
+      },
+    );
   }
 
   @override

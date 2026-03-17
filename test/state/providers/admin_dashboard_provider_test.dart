@@ -48,6 +48,8 @@ class _FakeAdminRepository implements AdminRepository {
   Result<void> createProductResult = const Success<void>(null);
   Result<void> confirmCashPaymentResult = const Success<void>(null);
   Result<void> updateOrderStatusResult = const Success<void>(null);
+  Result<void> updateOrderAddressResult = const Success<void>(null);
+  Result<void> updateSupportRequestStatusResult = const Success<void>(null);
 
   @override
   Future<Result<AdminProfile?>> getProfile() async => profileResult;
@@ -83,6 +85,15 @@ class _FakeAdminRepository implements AdminRepository {
   }
 
   @override
+  Future<Result<void>> updateOrderAddress({
+    required int orderId,
+    required String address,
+    required String addressDetails,
+  }) async {
+    return updateOrderAddressResult;
+  }
+
+  @override
   Future<Result<void>> confirmCashPayment({required int orderId}) async {
     return confirmCashPaymentResult;
   }
@@ -90,6 +101,15 @@ class _FakeAdminRepository implements AdminRepository {
   @override
   Future<Result<List<AdminSupportRequest>>> listSupportRequests() async {
     return supportRequestsResult;
+  }
+
+  @override
+  Future<Result<void>> updateSupportRequestStatus({
+    required int requestId,
+    required String status,
+    String? note,
+  }) async {
+    return updateSupportRequestStatusResult;
   }
 
   @override
@@ -287,6 +307,30 @@ void main() {
             createdAt: null,
           ),
         ]);
+    repository.ordersResult = const Success<List<AdminOrder>>(<AdminOrder>[
+      AdminOrder(
+        id: 3,
+        userId: 'u1',
+        email: 'user@test.com',
+        total: 24.5,
+        address: '',
+        addressDetails: '',
+        deliveryType: 'drop_off',
+        paymentMethod: 'aba_payway_qr',
+        cashPaidConfirmed: false,
+        cashPaidConfirmedAt: null,
+        cashPaidConfirmedBy: '',
+        paymentReference: 'PW1',
+        status: 'order_received',
+        deliveryLatitude: null,
+        deliveryLongitude: null,
+        deliveryLocationUpdatedAt: null,
+        deliveryLocationUpdatedBy: '',
+        deliveryLocationNote: '',
+        items: <AdminOrderItem>[],
+        createdAt: null,
+      ),
+    ]);
     final provider = AdminDashboardProvider(
       useCases: AdminUseCases(repository),
     );
@@ -296,6 +340,8 @@ void main() {
     expect(result.isSuccess, true);
     expect(provider.hasSupportAgentAccess, true);
     expect(provider.hasAdminAccess, false);
+    expect(provider.canViewOrders, true);
+    expect(provider.orders.length, 1);
     expect(provider.supportRequests.length, 1);
   });
 
@@ -325,5 +371,87 @@ void main() {
 
     expect(result.isFailure, true);
     expect(result.requireFailure, isA<PermissionDeniedFailure>());
+  });
+
+  test('support agent can update linked order address', () async {
+    final repository = _FakeAdminRepository();
+    repository.profileResult = Success<AdminProfile?>(
+      const AdminProfile(
+        id: 'u6',
+        email: 'support@test.com',
+        name: 'Support',
+        phone: '',
+        address: '',
+        accountType: 'support_agent',
+        createdAt: null,
+        updatedAt: null,
+      ),
+    );
+    repository.ordersResult = const Success<List<AdminOrder>>(<AdminOrder>[
+      AdminOrder(
+        id: 3,
+        userId: 'u1',
+        email: 'user@test.com',
+        total: 24.5,
+        address: '',
+        addressDetails: 'ASAP',
+        deliveryType: 'drop_off',
+        paymentMethod: 'aba_payway_qr',
+        cashPaidConfirmed: false,
+        cashPaidConfirmedAt: null,
+        cashPaidConfirmedBy: '',
+        paymentReference: 'PW1',
+        status: 'order_received',
+        deliveryLatitude: null,
+        deliveryLongitude: null,
+        deliveryLocationUpdatedAt: null,
+        deliveryLocationUpdatedBy: '',
+        deliveryLocationNote: '',
+        items: <AdminOrderItem>[],
+        createdAt: null,
+      ),
+    ]);
+    final provider = AdminDashboardProvider(
+      useCases: AdminUseCases(repository),
+    );
+    await provider.initialize();
+
+    final result = await provider.updateOrderAddress(
+      orderId: 3,
+      address: '56b Saint 143, Phnom Penh',
+      addressDetails: 'ASAP',
+    );
+
+    expect(result.isSuccess, true);
+    expect(provider.canUpdateOrderAddress, true);
+  });
+
+  test('support agent can update support request status', () async {
+    final repository = _FakeAdminRepository();
+    repository.profileResult = Success<AdminProfile?>(
+      const AdminProfile(
+        id: 'u7',
+        email: 'support@test.com',
+        name: 'Support',
+        phone: '',
+        address: '',
+        accountType: 'support_agent',
+        createdAt: null,
+        updatedAt: null,
+      ),
+    );
+    final provider = AdminDashboardProvider(
+      useCases: AdminUseCases(repository),
+    );
+    await provider.initialize();
+
+    final result = await provider.updateSupportRequestStatus(
+      requestId: 9,
+      status: 'resolved',
+      note: 'Your request has been resolved.',
+    );
+
+    expect(result.isSuccess, true);
+    expect(provider.canUpdateSupportRequestStatus, true);
   });
 }

@@ -6,9 +6,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:marketflow/core/auth/account_role.dart';
 import 'package:marketflow/core/auth/profile_identity_text.dart';
 import 'package:marketflow/core/location/address_text.dart';
+import 'package:marketflow/core/support/support_draft_store.dart';
+import 'package:marketflow/core/support/support_notification_store.dart';
+import 'package:marketflow/core/support/support_notification_summary.dart';
 import 'package:marketflow/core/widgets/logout_prompt_dialog.dart';
 import 'package:marketflow/features/admin/presentation/pages/admin_dashboard_screen.dart';
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
+import 'package:marketflow/features/checkout/presentation/bloc/order_management_provider.dart';
 import 'package:marketflow/features/checkout/presentation/pages/checkout_address_selection_screen.dart';
 import 'package:marketflow/features/checkout/presentation/pages/order_history_list_screen.dart';
 import 'package:marketflow/features/support/presentation/pages/customer_support_screen.dart';
@@ -39,6 +43,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   static const String _notifySecurityKey = 'notify_security_alerts';
 
   final TextEditingController _name = TextEditingController();
+  final SupportDraftStore _supportDraftStore = const SupportDraftStore();
+  final SupportNotificationStore _supportNotificationStore =
+      const SupportNotificationStore();
 
   bool loading = true;
   bool _updatingProfile = false;
@@ -46,6 +53,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _changingPassword = false;
   bool _updatingNotifications = false;
   bool _updatingAvatar = false;
+  bool _loadingSupportNotifications = false;
+  bool _loadingSupportDraft = false;
 
   String _phone = '';
   String _address = '';
@@ -55,6 +64,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _restockAlertsEnabled = false;
   bool _securityAlertsEnabled = true;
   AccountRole accountRole = AccountRole.fromRaw(AccountRole.customerValue);
+  CustomerSupportDraft? _supportDraft;
+  SupportNotificationSummary _supportNotifications =
+      const SupportNotificationSummary();
 
   bool get _busy =>
       _updatingProfile ||
@@ -105,6 +117,133 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         setState(() => loading = false);
       }
     }
+
+    if (mounted) {
+      await _refreshSupportNotifications(auth);
+      await _refreshSupportDraft(auth);
+    }
+  }
+
+  OrderManagementProvider? _orderManagementProviderOrNull() {
+    try {
+      return context.read<OrderManagementProvider>();
+    } on ProviderNotFoundException {
+      return null;
+    }
+  }
+
+  Future<void> _refreshSupportNotifications(AuthenticationProvider auth) async {
+    final user = auth.user;
+    final orderProvider = _orderManagementProviderOrNull();
+    if (user == null || !accountRole.isCustomer || orderProvider == null) {
+      if (!mounted) return;
+      setState(() {
+        _loadingSupportNotifications = false;
+        _supportNotifications = const SupportNotificationSummary();
+      });
+      return;
+    }
+
+    if (mounted) {
+      setState(() => _loadingSupportNotifications = true);
+    }
+
+    try {
+      final orders = await orderProvider.loadOrders();
+      final seenAt = await _supportNotificationStore.loadSeenAt(
+        userId: user.id,
+      );
+      final summary = summarizeSupportNotifications(
+        orders,
+        lastSeenAt: seenAt,
+        maxItems: 2,
+      );
+      if (!mounted) return;
+      setState(() => _supportNotifications = summary);
+    } catch (_) {
+      if (!mounted) return;
+      setState(
+        () => _supportNotifications = const SupportNotificationSummary(),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _loadingSupportNotifications = false);
+      }
+    }
+  }
+
+  Future<void> _refreshSupportDraft(AuthenticationProvider auth) async {
+    final user = auth.user;
+    if (user == null || !accountRole.isCustomer) {
+      if (!mounted) return;
+      setState(() {
+        _loadingSupportDraft = false;
+        _supportDraft = null;
+      });
+      return;
+    }
+
+    if (mounted) {
+      setState(() => _loadingSupportDraft = true);
+    }
+
+    try {
+      final draft = await _supportDraftStore.loadDraft(scope: user.id);
+      if (!mounted) return;
+      setState(() {
+        _supportDraft = draft == null || draft.message.trim().isEmpty
+            ? null
+            : draft;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _supportDraft = null);
+    } finally {
+      if (mounted) {
+        setState(() => _loadingSupportDraft = false);
+      }
+    }
+  }
+
+  bool get _hasSupportDraft =>
+      _supportDraft != null && _supportDraft!.message.trim().isNotEmpty;
+
+  String _supportRequestTypeLabel(String raw) {
+    switch (raw.trim().toLowerCase()) {
+      case 'order':
+        return 'Order issue';
+      case 'payment':
+        return 'Payment issue';
+      case 'delivery':
+        return 'Delivery issue';
+      case 'refund':
+        return 'Refund request';
+      case 'account':
+        return 'Account issue';
+      default:
+        return 'General question';
+    }
+  }
+
+  String _supportDraftTitle() {
+    final draft = _supportDraft;
+    if (draft == null) return 'Draft saved';
+    final followUp = draft.followUp;
+    if (followUp != null && followUp.orderId > 0) {
+      return 'Resume Order #${followUp.orderId} follow-up';
+    }
+    return 'Draft saved';
+  }
+
+  String _supportDraftDescription() {
+    final draft = _supportDraft;
+    if (draft == null) return '';
+    final followUp = draft.followUp;
+    final requestLabel = _supportRequestTypeLabel(draft.requestType);
+    if (followUp != null && followUp.orderId > 0) {
+      return '$requestLabel draft is saved on this device and ready to send.';
+    }
+    return '$requestLabel draft is saved on this device and ready to send.';
   }
 
   void _applyUserMetadata(User? user) {
@@ -1423,10 +1562,358 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
   }
 
+  Future<void> _openOrders(
+    AuthenticationProvider auth, {
+    int? initialOrderId,
+  }) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => OrderHistoryListScreen(initialOrderId: initialOrderId),
+      ),
+    );
+    if (!mounted) return;
+    await _refreshSupportNotifications(auth);
+  }
+
+  Future<void> _openCustomerSupport(AuthenticationProvider auth) async {
+    final latestSupportItem = !_hasSupportDraft && _supportNotifications.items.isNotEmpty
+        ? _supportNotifications.items.first
+        : null;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomerSupportScreen(
+          initialFollowUpOrderId: latestSupportItem?.orderId,
+          initialFollowUpStatus: latestSupportItem?.status,
+          initialFollowUpRequestType: latestSupportItem?.requestType,
+          initialFollowUpSupportNote: latestSupportItem?.supportNote,
+          initialFollowUpActivityAt: latestSupportItem?.activityAt
+              .toUtc()
+              .toIso8601String(),
+          initialFollowUpSharedAddress: latestSupportItem?.sharedAddress,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await _refreshSupportNotifications(auth);
+    await _refreshSupportDraft(auth);
+  }
+
+  Future<void> _clearSupportDraft(AuthenticationProvider auth) async {
+    final user = auth.user;
+    if (user == null || !_hasSupportDraft) return;
+
+    try {
+      await _supportDraftStore.clearDraft(scope: user.id);
+      if (!mounted) return;
+      setState(() => _supportDraft = null);
+      _showMessage('Saved support draft cleared');
+    } catch (_) {
+      _showMessage('Could not clear saved draft');
+    }
+  }
+
+  String _supportStatusLabel(String status) {
+    switch (status.trim().toLowerCase()) {
+      case 'address_applied':
+        return 'Address applied';
+      case 'resolved':
+        return 'Resolved';
+      default:
+        return 'Pending';
+    }
+  }
+
+  String _supportStatusSummary(String status) {
+    switch (status.trim().toLowerCase()) {
+      case 'address_applied':
+        return 'Support updated the delivery address and left a fresh note.';
+      case 'resolved':
+        return 'Support finished the latest request and shared a final reply.';
+      default:
+        return 'Support still has an open request tied to one of your orders.';
+    }
+  }
+
+  String _supportActivityDateLabel(DateTime activityAt) {
+    String two(int value) => value.toString().padLeft(2, '0');
+    final local = activityAt.toLocal();
+    return '${local.year}-${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
+  }
+
+  int? _primarySupportOrderId() {
+    final summary = _supportNotifications;
+    if (summary.items.isNotEmpty) {
+      return summary.items.first.orderId;
+    }
+    final followUpOrderId = _supportDraft?.followUp?.orderId ?? 0;
+    if (followUpOrderId > 0) {
+      return followUpOrderId;
+    }
+    return null;
+  }
+
+  String _primarySupportStatus() {
+    final summary = _supportNotifications;
+    if (summary.items.isNotEmpty) {
+      return summary.items.first.status.trim().toLowerCase();
+    }
+    return (_supportDraft?.followUp?.status ?? '').trim().toLowerCase();
+  }
+
+  String _supportActionLabel(String status) {
+    switch (status.trim().toLowerCase()) {
+      case 'resolved':
+        return 'Reopen in Support';
+      case 'address_applied':
+        return 'Send another update';
+      default:
+        return 'Reply in Support';
+    }
+  }
+
+  String _supportActionDescription(String status, int orderId) {
+    switch (status.trim().toLowerCase()) {
+      case 'resolved':
+        return 'Reopen Order #$orderId in Support';
+      case 'address_applied':
+        return 'Update Order #$orderId in Support';
+      default:
+        return 'Reply about Order #$orderId';
+    }
+  }
+
+  Widget _buildSupportUpdatesCard(AuthenticationProvider auth) {
+    final summary = _supportNotifications;
+    final primarySupportOrderId = _primarySupportOrderId();
+    final primarySupportStatus = _primarySupportStatus();
+    final shouldShowCard =
+        summary.hasItems ||
+        summary.hasActiveRequests ||
+        _hasSupportDraft ||
+        _loadingSupportNotifications ||
+        _loadingSupportDraft;
+    if (!accountRole.isCustomer || !shouldShowCard) {
+      return const SizedBox.shrink();
+    }
+
+    return _buildSectionCard(
+      title: 'Support Updates',
+      subtitle:
+          'Keep up with replies and recovery steps on your latest orders.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_loadingSupportNotifications)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: LinearProgressIndicator(minHeight: 3),
+            ),
+          if (_loadingSupportDraft)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: LinearProgressIndicator(minHeight: 3),
+            ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildInlineBadge(
+                label: summary.hasUnread
+                    ? '${summary.unreadCount} unread'
+                    : 'Caught up',
+                background: summary.hasUnread
+                    ? const Color(0xFFFFF0E8)
+                    : const Color(0xFFE8F4EF),
+                foreground: summary.hasUnread
+                    ? const Color(0xFFB85A00)
+                    : const Color(0xFF0B6F58),
+              ),
+              if (summary.hasActiveRequests)
+                _buildInlineBadge(
+                  label:
+                      '${summary.activeRequestCount} open request${summary.activeRequestCount == 1 ? '' : 's'}',
+                  background: const Color(0xFFEAF4FF),
+                  foreground: const Color(0xFF1E5E9A),
+                ),
+              if (_hasSupportDraft)
+                _buildInlineBadge(
+                  label: 'Draft saved',
+                  background: const Color(0xFFFFF5E8),
+                  foreground: const Color(0xFFB85A00),
+                ),
+            ],
+          ),
+          if (_hasSupportDraft) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFAF2),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFE8D9B0)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _supportDraftTitle(),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF2A2417),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _supportDraftDescription(),
+                    style: const TextStyle(
+                      color: Color(0xFF5B6570),
+                      height: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: () => _openCustomerSupport(auth),
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                        label: const Text('Resume draft'),
+                      ),
+                      TextButton(
+                        key: const ValueKey<String>(
+                          'clear_profile_support_draft',
+                        ),
+                        onPressed: () => _clearSupportDraft(auth),
+                        child: const Text('Clear draft'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (summary.items.isEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              _hasSupportDraft
+                  ? 'You still have a saved support draft on this device. Open support to finish or clear it.'
+                  : 'Your latest support request is still open. We will surface fresh replies here as soon as support responds.',
+              style: const TextStyle(color: Color(0xFF5B6570), height: 1.45),
+            ),
+          ] else ...[
+            const SizedBox(height: 12),
+            ...summary.items.map((item) {
+              return Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: item.isResolved
+                      ? const Color(0xFFF4FBF7)
+                      : const Color(0xFFF7FAFC),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: item.isResolved
+                        ? const Color(0xFFCEE8D6)
+                        : const Color(0xFFD8E4DD),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          'Order #${item.orderId}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF14211C),
+                          ),
+                        ),
+                        _buildInlineBadge(
+                          label: _supportStatusLabel(item.status),
+                          background: item.isResolved
+                              ? const Color(0xFFE8F4EF)
+                              : const Color(0xFFEAF4FF),
+                          foreground: item.isResolved
+                              ? const Color(0xFF0B6F58)
+                              : const Color(0xFF1E5E9A),
+                        ),
+                        Text(
+                          _supportActivityDateLabel(item.activityAt),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF5B6570),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      item.supportNote.isNotEmpty
+                          ? item.supportNote
+                          : _supportStatusSummary(item.status),
+                      style: const TextStyle(
+                        color: Color(0xFF1F2A24),
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: () => _openOrders(
+                  auth,
+                  initialOrderId: primarySupportOrderId,
+                ),
+                icon: const Icon(Icons.receipt_long_outlined),
+                label: Text(
+                  primarySupportOrderId == null
+                      ? 'Review in My Orders'
+                      : 'View Order #$primarySupportOrderId',
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _openCustomerSupport(auth),
+                icon: const Icon(Icons.support_agent_outlined),
+                label: Text(
+                  _hasSupportDraft
+                      ? 'Resume draft'
+                      : summary.items.isNotEmpty
+                      ? _supportActionLabel(primarySupportStatus)
+                      : 'Open Support',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildActionButton({
     required IconData icon,
     required String label,
     required VoidCallback? onPressed,
+    String? description,
+    String? badgeLabel,
+    Color? badgeBackground,
+    Color? badgeForeground,
     bool destructive = false,
   }) {
     return SizedBox(
@@ -1440,12 +1927,77 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
           side: destructive ? const BorderSide(color: Color(0xFFD7A5A5)) : null,
         ),
         icon: Icon(icon),
-        label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+        label: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  if (description != null && description.trim().isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      description.trim(),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF5B6570),
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (badgeLabel != null && badgeLabel.trim().isNotEmpty) ...[
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: badgeBackground ?? const Color(0xFFEAF4FF),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  badgeLabel.trim(),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: badgeForeground ?? const Color(0xFF1E5E9A),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildActionsCard(AuthenticationProvider auth) {
+    final unreadSupportCount = _supportNotifications.unreadCount;
+    final activeSupportRequestCount = _supportNotifications.activeRequestCount;
+    final primarySupportOrderId = _primarySupportOrderId();
+    final primarySupportStatus = _primarySupportStatus();
+    final highlightedOrderId = unreadSupportCount > 0
+        ? primarySupportOrderId
+        : null;
+    final supportDescriptionPieces = <String>[
+      if (_hasSupportDraft) _supportDraftTitle(),
+      if (!_hasSupportDraft && primarySupportOrderId != null)
+        _supportActionDescription(primarySupportStatus, primarySupportOrderId),
+      if (!_hasSupportDraft && unreadSupportCount > 0)
+        '$unreadSupportCount unread update${unreadSupportCount == 1 ? '' : 's'}',
+      if (activeSupportRequestCount > 0)
+        '$activeSupportRequestCount active request${activeSupportRequestCount == 1 ? '' : 's'}',
+    ];
+    final supportDescriptionParts = supportDescriptionPieces.isEmpty
+        ? const <String>[]
+        : <String>[supportDescriptionPieces.join(' - ')];
+
     return _buildSectionCard(
       title: 'Quick Actions',
       subtitle: 'Manage your details, favorites, and order history quickly.',
@@ -1474,28 +2026,50 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
           const SizedBox(height: 10),
           _buildActionButton(
             onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const OrderHistoryListScreen(),
-                ),
-              );
+              _openOrders(auth, initialOrderId: highlightedOrderId);
             },
             icon: Icons.receipt_long,
             label: 'My Orders',
+            description: unreadSupportCount > 0
+                ? primarySupportOrderId != null && unreadSupportCount == 1
+                    ? '1 new support update on Order #$primarySupportOrderId'
+                    : '$unreadSupportCount new support update${unreadSupportCount == 1 ? '' : 's'}'
+                : null,
+            badgeLabel: unreadSupportCount > 0 ? '$unreadSupportCount' : null,
+            badgeBackground: const Color(0xFFFFF0E8),
+            badgeForeground: const Color(0xFFB85A00),
           ),
           const SizedBox(height: 10),
           _buildActionButton(
             onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const CustomerSupportScreen(),
-                ),
-              );
+              _openCustomerSupport(auth);
             },
             icon: Icons.support_agent_outlined,
-            label: 'Customer Support',
+            label: _hasSupportDraft
+                ? 'Resume Support Draft'
+                : primarySupportOrderId != null
+                ? _supportActionLabel(primarySupportStatus)
+                : 'Customer Support',
+            description: supportDescriptionParts.isEmpty
+                ? null
+                : supportDescriptionParts.join(' • '),
+            badgeLabel: _hasSupportDraft
+                ? 'Draft'
+                : unreadSupportCount > 0
+                ? '$unreadSupportCount'
+                : activeSupportRequestCount > 0
+                ? '$activeSupportRequestCount'
+                : null,
+            badgeBackground: _hasSupportDraft
+                ? const Color(0xFFFFF5E8)
+                : unreadSupportCount > 0
+                ? const Color(0xFFFFF0E8)
+                : const Color(0xFFEAF4FF),
+            badgeForeground: _hasSupportDraft
+                ? const Color(0xFFB85A00)
+                : unreadSupportCount > 0
+                ? const Color(0xFFB85A00)
+                : const Color(0xFF1E5E9A),
           ),
           if (accountRole.isAdmin || accountRole.isCashier) ...[
             const SizedBox(height: 10),
@@ -1571,6 +2145,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     _buildSecurityCard(auth, user),
                     const SizedBox(height: 14),
                     _buildNotificationsCard(auth),
+                    if (accountRole.isCustomer &&
+                        (_supportNotifications.hasItems ||
+                            _supportNotifications.hasActiveRequests ||
+                            _loadingSupportNotifications ||
+                            _hasSupportDraft ||
+                            _loadingSupportDraft)) ...[
+                      const SizedBox(height: 14),
+                      _buildSupportUpdatesCard(auth),
+                    ],
                     const SizedBox(height: 14),
                     _buildActionsCard(auth),
                   ],

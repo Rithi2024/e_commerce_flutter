@@ -58,10 +58,15 @@ class AdminDashboardProvider extends ChangeNotifier {
   bool get canViewAccounts => hasAdminAccess;
   bool get canManageProductsAndEvents => hasAdminAccess;
   bool get canViewOrders =>
-      hasAdminAccess || hasCashierAccess || hasRiderAccess;
+      hasAdminAccess ||
+      hasCashierAccess ||
+      hasRiderAccess ||
+      hasSupportAgentAccess;
   bool get canConfirmCashPayments => hasAdminAccess || hasCashierAccess;
   bool get canUpdateDeliveryStatus => hasAdminAccess || hasRiderAccess;
+  bool get canUpdateOrderAddress => hasAdminAccess || hasSupportAgentAccess;
   bool get canViewSupportRequests => hasSupportAgentAccess;
+  bool get canUpdateSupportRequestStatus => hasSupportAgentAccess;
 
   Future<Result<void>> initialize() async {
     checkingAccess = true;
@@ -394,6 +399,50 @@ class AdminDashboardProvider extends ChangeNotifier {
     return const Success<void>(null);
   }
 
+  Future<Result<void>> updateOrderAddress({
+    required int orderId,
+    required String address,
+    required String addressDetails,
+  }) async {
+    if (!canUpdateOrderAddress) {
+      return FailureResult<void>(
+        PermissionDeniedFailure('Order address update access required'),
+      );
+    }
+
+    submitting = true;
+    notifyListeners();
+
+    final result = await _useCases.updateOrderAddress(
+      orderId: orderId,
+      address: address,
+      addressDetails: addressDetails,
+    );
+    if (result.isFailure) {
+      submitting = false;
+      final failure = result.requireFailure;
+      error = failure.message;
+      notifyListeners();
+      _logFailure(
+        action: 'update_order_address',
+        failure: failure,
+        metadata: {'orderId': orderId},
+      );
+      return FailureResult<void>(failure);
+    }
+
+    final loadResult = await loadOrders(notify: false);
+    submitting = false;
+    notifyListeners();
+
+    if (loadResult.isFailure) {
+      return FailureResult<void>(loadResult.requireFailure);
+    }
+
+    _logInfo(action: 'update_order_address', metadata: {'orderId': orderId});
+    return const Success<void>(null);
+  }
+
   Future<Result<void>> loadEvents({bool notify = true}) async {
     if (!canManageProductsAndEvents) {
       loadingEvents = false;
@@ -449,6 +498,61 @@ class AdminDashboardProvider extends ChangeNotifier {
     _logInfo(
       action: 'load_support_requests',
       metadata: {'count': _supportRequests.length},
+    );
+    return const Success<void>(null);
+  }
+
+  Future<Result<void>> updateSupportRequestStatus({
+    required int requestId,
+    required String status,
+    String? note,
+  }) async {
+    if (!canUpdateSupportRequestStatus) {
+      return FailureResult<void>(
+        PermissionDeniedFailure('Support request status access required'),
+      );
+    }
+
+    submitting = true;
+    notifyListeners();
+
+    final result = await _useCases.updateSupportRequestStatus(
+      requestId: requestId,
+      status: status,
+      note: note,
+    );
+    if (result.isFailure) {
+      submitting = false;
+      final failure = result.requireFailure;
+      error = failure.message;
+      notifyListeners();
+      _logFailure(
+        action: 'update_support_request_status',
+        failure: failure,
+        metadata: {
+          'requestId': requestId,
+          'status': status,
+          if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+        },
+      );
+      return FailureResult<void>(failure);
+    }
+
+    final loadResult = await loadSupportRequests(notify: false);
+    submitting = false;
+    notifyListeners();
+
+    if (loadResult.isFailure) {
+      return FailureResult<void>(loadResult.requireFailure);
+    }
+
+    _logInfo(
+      action: 'update_support_request_status',
+      metadata: {
+        'requestId': requestId,
+        'status': status,
+        if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+      },
     );
     return const Success<void>(null);
   }

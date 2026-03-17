@@ -76,7 +76,13 @@ class SupabaseOrderRepository implements OrderRepository {
     final staleCache = await _readOrdersFromCache();
     try {
       final dynamic rows = await _dataProxy.rpc('rpc_get_orders');
-      final orders = _mapRowsToOrders(rows);
+      var orders = _mapRowsToOrders(rows);
+      final supportStatuses = await _loadOrderSupportHistory();
+      if (supportStatuses.isNotEmpty) {
+        orders = orders
+            .map((order) => _mergeSupportStatus(order, supportStatuses))
+            .toList();
+      }
       orders.sort(
         (a, b) => _parseOrderCreatedAt(
           b['created_at'],
@@ -90,6 +96,104 @@ class SupabaseOrderRepository implements OrderRepository {
       }
       rethrow;
     }
+  }
+
+  Future<Map<int, Map<String, dynamic>>> _loadOrderSupportHistory() async {
+    try {
+      final dynamic rows = await _dataProxy.rpc(
+        'rpc_get_order_support_statuses',
+      );
+      final grouped = <int, List<Map<String, dynamic>>>{};
+      for (final row in rows is List ? rows : const <dynamic>[]) {
+        if (row is! Map) continue;
+        final item = Map<String, dynamic>.from(row);
+        final orderId = parseOrderId(item['order_id']);
+        if (orderId <= 0) continue;
+        grouped.putIfAbsent(orderId, () => <Map<String, dynamic>>[]).add({
+          'request_id': parseOrderId(item['request_id']),
+          'request_type': (item['request_type'] ?? 'general').toString().trim(),
+          'support_request_status': _normalizeSupportRequestStatus(
+            item['support_request_status'],
+          ),
+          'support_request_status_updated_at':
+              item['support_request_status_updated_at'],
+          'support_request_created_at': item['support_request_created_at'],
+          'support_request_message': (item['support_request_message'] ?? '')
+              .toString(),
+          'support_note': (item['support_note'] ?? '').toString().trim(),
+          'support_note_updated_at': item['support_note_updated_at'],
+        });
+      }
+
+      final mapped = <int, Map<String, dynamic>>{};
+      for (final entry in grouped.entries) {
+        final history = List<Map<String, dynamic>>.from(entry.value)
+          ..sort(
+            (a, b) => _parseSupportRequestSortAt(
+              b,
+            ).compareTo(_parseSupportRequestSortAt(a)),
+          );
+        if (history.isEmpty) continue;
+        final latest = history.first;
+        mapped[entry.key] = <String, dynamic>{
+          'support_request_status': latest['support_request_status'],
+          'support_request_status_updated_at':
+              latest['support_request_status_updated_at'],
+          'support_request_history': history,
+        };
+      }
+      return mapped;
+    } catch (_) {
+      return const <int, Map<String, dynamic>>{};
+    }
+  }
+
+  Map<String, dynamic> _mergeSupportStatus(
+    Map<String, dynamic> order,
+    Map<int, Map<String, dynamic>> supportStatuses,
+  ) {
+    final orderId = parseOrderId(order['id']);
+    final support = supportStatuses[orderId];
+    if (support == null) return order;
+
+    return <String, dynamic>{
+      ...order,
+      'support_request_status': support['support_request_status'],
+      'support_request_status_updated_at':
+          support['support_request_status_updated_at'],
+      'support_request_history': support['support_request_history'],
+    };
+  }
+
+  String _normalizeSupportRequestStatus(dynamic raw) {
+    final value = (raw ?? '').toString().trim().toLowerCase();
+    switch (value) {
+      case 'address_applied':
+      case 'resolved':
+        return value;
+      default:
+        return 'pending';
+    }
+  }
+
+  DateTime _parseSupportRequestSortAt(Map<String, dynamic> item) {
+    final updatedAt = DateTime.tryParse(
+      (item['support_request_status_updated_at'] ?? '').toString(),
+    );
+    final noteUpdatedAt = DateTime.tryParse(
+      (item['support_note_updated_at'] ?? '').toString(),
+    );
+    if (updatedAt != null && noteUpdatedAt != null) {
+      return updatedAt.isAfter(noteUpdatedAt)
+          ? updatedAt.toUtc()
+          : noteUpdatedAt.toUtc();
+    }
+    if (noteUpdatedAt != null) return noteUpdatedAt.toUtc();
+    if (updatedAt != null) return updatedAt.toUtc();
+    final createdAt = DateTime.tryParse(
+      (item['support_request_created_at'] ?? '').toString(),
+    );
+    return createdAt?.toUtc() ?? DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   @override

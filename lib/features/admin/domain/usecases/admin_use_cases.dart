@@ -91,6 +91,29 @@ class AdminUseCases {
     return _repository.updateOrderStatus(orderId: orderId, status: nextStatus);
   }
 
+  Future<Result<void>> updateOrderAddress({
+    required int orderId,
+    required String address,
+    required String addressDetails,
+  }) {
+    if (orderId <= 0) {
+      return Future.value(
+        FailureResult<void>(ValidationFailure('Order id is required')),
+      );
+    }
+    final nextAddress = address.trim();
+    if (nextAddress.isEmpty) {
+      return Future.value(
+        FailureResult<void>(ValidationFailure('Address is required')),
+      );
+    }
+    return _repository.updateOrderAddress(
+      orderId: orderId,
+      address: nextAddress,
+      addressDetails: addressDetails.trim(),
+    );
+  }
+
   Future<Result<void>> confirmCashPayment({required int orderId}) {
     if (orderId <= 0) {
       return Future.value(
@@ -106,6 +129,32 @@ class AdminUseCases {
 
   Future<Result<List<AdminSupportRequest>>> listSupportRequests() {
     return _repository.listSupportRequests();
+  }
+
+  Future<Result<void>> updateSupportRequestStatus({
+    required int requestId,
+    required String status,
+    String? note,
+  }) {
+    if (requestId <= 0) {
+      return Future.value(
+        FailureResult<void>(ValidationFailure('Request id is required')),
+      );
+    }
+    final normalized = status.trim().toLowerCase();
+    const allowed = <String>{'pending', 'address_applied', 'resolved'};
+    if (!allowed.contains(normalized)) {
+      return Future.value(
+        FailureResult<void>(
+          ValidationFailure('Invalid support request status'),
+        ),
+      );
+    }
+    return _repository.updateSupportRequestStatus(
+      requestId: requestId,
+      status: normalized,
+      note: note?.trim(),
+    );
   }
 
   Future<Result<void>> createEvent({

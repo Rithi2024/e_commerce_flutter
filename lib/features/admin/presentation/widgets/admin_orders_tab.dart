@@ -1,5 +1,6 @@
 import 'package:marketflow/features/admin/domain/entities/admin_order_model.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class AdminOrdersTab extends StatelessWidget {
   const AdminOrdersTab({
@@ -69,11 +70,17 @@ class AdminOrdersTab extends StatelessWidget {
                     final orderId = order.id.toString();
                     final email = order.email;
                     final status = order.status.trim().toLowerCase();
+                    final deliveryTypeRaw = order.deliveryType
+                        .trim()
+                        .toLowerCase();
                     final paymentMethodRaw = order.paymentMethod
                         .trim()
                         .toLowerCase();
                     final isCashOnDelivery =
                         paymentMethodRaw == 'cash_on_delivery';
+                    final isPickup =
+                        deliveryTypeRaw == 'real_meeting' ||
+                        deliveryTypeRaw == 'pickup';
                     final deliveryType = deliveryTypeLabel(order.deliveryType);
                     final paymentMethod = paymentMethodLabel(
                       order.paymentMethod,
@@ -96,6 +103,18 @@ class AdminOrdersTab extends StatelessWidget {
                     final statusUpdateOptions = canUpdateDeliveryStatus
                         ? statusUpdateOptionsForOrder(order)
                         : const <String>[];
+                    final missingDeliveryAddress =
+                        !isPickup &&
+                        address.isEmpty &&
+                        status != 'cancelled' &&
+                        status != 'delivered';
+                    final canShowDeliveryQrActions =
+                        canUseDeliveryQr &&
+                        canUpdateDeliveryStatus &&
+                        statusUpdateOptions.isNotEmpty &&
+                        !missingDeliveryAddress &&
+                        status != 'cancelled' &&
+                        status != 'delivered';
 
                     return Container(
                       padding: const EdgeInsets.all(14),
@@ -204,6 +223,36 @@ class AdminOrdersTab extends StatelessWidget {
                             const SizedBox(height: 4),
                             Text('Details: $addressDetails'),
                           ],
+                          if (missingDeliveryAddress) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              'Address required before delivery handoff.',
+                              style: TextStyle(
+                                color: Colors.orange.shade800,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (email.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              OutlinedButton.icon(
+                                onPressed: () async {
+                                  await Clipboard.setData(
+                                    ClipboardData(text: email),
+                                  );
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Copied customer email for order #$orderId',
+                                      ),
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.content_copy_outlined),
+                                label: const Text('Copy customer email'),
+                              ),
+                            ],
+                          ],
                           if (canConfirmCash) ...[
                             const SizedBox(height: 10),
                             SizedBox(
@@ -230,9 +279,7 @@ class AdminOrdersTab extends StatelessWidget {
                               ),
                             ),
                           ],
-                          if (canUseDeliveryQr &&
-                              canUpdateDeliveryStatus &&
-                              status != 'cancelled') ...[
+                          if (canShowDeliveryQrActions) ...[
                             const SizedBox(height: 10),
                             Wrap(
                               spacing: 8,

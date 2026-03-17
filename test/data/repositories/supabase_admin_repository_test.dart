@@ -4,6 +4,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _FakeAdminDataSource implements AdminDataSource {
   bool throwOnListProfiles = false;
+  int updateOrderAddressCalls = 0;
+  String? lastUpdatedOrderAddress;
+  int updateSupportRequestStatusCalls = 0;
+  String? lastSupportRequestStatus;
+  String? lastSupportRequestNote;
 
   @override
   Future<Map<String, dynamic>?> getProfile() async {
@@ -92,6 +97,16 @@ class _FakeAdminDataSource implements AdminDataSource {
   }) async {}
 
   @override
+  Future<void> updateOrderAddress({
+    required int orderId,
+    required String address,
+    required String addressDetails,
+  }) async {
+    updateOrderAddressCalls++;
+    lastUpdatedOrderAddress = address;
+  }
+
+  @override
   Future<void> confirmCashPayment({required int orderId}) async {}
 
   @override
@@ -103,9 +118,22 @@ class _FakeAdminDataSource implements AdminDataSource {
         'message': 'Where is my package?',
         'session_id': 'chat-test-session',
         'is_anonymous': true,
+        'status': 'pending',
+        'support_note': 'We are checking this now.',
         'created_at': '2025-01-01T00:00:00Z',
       },
     ];
+  }
+
+  @override
+  Future<void> updateSupportRequestStatus({
+    required int requestId,
+    required String status,
+    String? note,
+  }) async {
+    updateSupportRequestStatusCalls++;
+    lastSupportRequestStatus = status;
+    lastSupportRequestNote = note;
   }
 
   @override
@@ -196,7 +224,48 @@ void main() {
     expect(supportResult.requireValue.first.requestType, 'delivery');
     expect(supportResult.requireValue.first.isAnonymous, true);
     expect(supportResult.requireValue.first.sessionId, 'chat-test-session');
+    expect(
+      supportResult.requireValue.first.supportNote,
+      'We are checking this now.',
+    );
   });
+
+  test('SupabaseAdminRepository delegates order address updates', () async {
+    final dataSource = _FakeAdminDataSource();
+    final repository = SupabaseAdminRepository(service: dataSource);
+
+    final result = await repository.updateOrderAddress(
+      orderId: 3,
+      address: '56b Saint 143, Phnom Penh',
+      addressDetails: 'ASAP',
+    );
+
+    expect(result.isSuccess, true);
+    expect(dataSource.updateOrderAddressCalls, 1);
+    expect(dataSource.lastUpdatedOrderAddress, '56b Saint 143, Phnom Penh');
+  });
+
+  test(
+    'SupabaseAdminRepository delegates support request status updates',
+    () async {
+      final dataSource = _FakeAdminDataSource();
+      final repository = SupabaseAdminRepository(service: dataSource);
+
+      final result = await repository.updateSupportRequestStatus(
+        requestId: 9,
+        status: 'resolved',
+        note: 'Your request has been resolved.',
+      );
+
+      expect(result.isSuccess, true);
+      expect(dataSource.updateSupportRequestStatusCalls, 1);
+      expect(dataSource.lastSupportRequestStatus, 'resolved');
+      expect(
+        dataSource.lastSupportRequestNote,
+        'Your request has been resolved.',
+      );
+    },
+  );
 
   test(
     'SupabaseAdminRepository maps datasource exceptions to failures',

@@ -3,29 +3,31 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:marketflow/features/auth/domain/entities/user_profile_model.dart';
+import 'package:marketflow/core/support/support_draft_store.dart';
 import 'package:marketflow/features/auth/domain/repository/auth_repository.dart';
 import 'package:marketflow/features/auth/domain/usecases/auth_use_cases.dart';
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
+import 'package:marketflow/features/cart/domain/entities/cart_line_item.dart';
+import 'package:marketflow/features/checkout/domain/entities/checkout_prefill_model.dart';
+import 'package:marketflow/features/checkout/domain/repository/order_repository.dart';
+import 'package:marketflow/features/checkout/domain/usecases/order_use_cases.dart';
+import 'package:marketflow/features/checkout/presentation/bloc/order_management_provider.dart';
+import 'package:marketflow/features/settings/presentation/bloc/app_settings_provider.dart';
 import 'package:marketflow/features/settings/presentation/pages/user_profile_screen.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+  });
+
   testWidgets('Profile screen shows the expanded profile sections', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(
-      ChangeNotifierProvider<AuthenticationProvider>(
-        create: (_) => AuthenticationProvider(
-          useCases: AuthUseCases(_FakeAuthRepository()),
-        ),
-        child: MaterialApp(
-          theme: ThemeData(useMaterial3: false),
-          home: const UserProfileScreen(),
-        ),
-      ),
-    );
+    await tester.pumpWidget(_buildProfileTestApp());
 
     await tester.pumpAndSettle();
 
@@ -39,20 +41,195 @@ void main() {
     expect(find.text('Email verified'), findsOneWidget);
   });
 
-  testWidgets('Change password dialog asks for the current password', (
+  testWidgets('Profile shows support update notifications and order badges', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
-      ChangeNotifierProvider<AuthenticationProvider>(
-        create: (_) => AuthenticationProvider(
-          useCases: AuthUseCases(_FakeAuthRepository()),
-        ),
-        child: MaterialApp(
-          theme: ThemeData(useMaterial3: false),
-          home: const UserProfileScreen(),
+      _buildProfileTestApp(
+        orderRepository: _FakeOrderRepository(
+          orders: <Map<String, dynamic>>[
+            <String, dynamic>{
+              'id': 3,
+              'support_request_status': 'resolved',
+              'support_request_history': <Map<String, dynamic>>[
+                <String, dynamic>{
+                  'request_type': 'delivery',
+                  'support_request_status': 'resolved',
+                  'support_request_status_updated_at': '2026-03-17T10:31:59Z',
+                  'support_note':
+                      'Your address update has been applied and this support request is now resolved.',
+                  'support_note_updated_at': '2026-03-17T10:31:59Z',
+                },
+              ],
+            },
+          ],
         ),
       ),
     );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('Support Updates'), findsOneWidget);
+    expect(find.text('1 unread'), findsOneWidget);
+    expect(find.text('Order #3'), findsOneWidget);
+    expect(
+      find.text(
+        'Your address update has been applied and this support request is now resolved.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('1 new support update on Order #3'), findsOneWidget);
+    expect(find.text('View Order #3'), findsOneWidget);
+  });
+
+  testWidgets('Profile opens My Orders on the updated order when support is unread', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildProfileTestApp(
+        orderRepository: _FakeOrderRepository(
+          orders: <Map<String, dynamic>>[
+            <String, dynamic>{
+              'id': 3,
+              'support_request_status': 'resolved',
+              'support_request_history': <Map<String, dynamic>>[
+                <String, dynamic>{
+                  'request_type': 'delivery',
+                  'support_request_status': 'resolved',
+                  'support_request_status_updated_at': '2026-03-17T10:31:59Z',
+                  'support_note':
+                      'Your address update has been applied and this support request is now resolved.',
+                  'support_note_updated_at': '2026-03-17T10:31:59Z',
+                },
+              ],
+            },
+          ],
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 new support update on Order #3'), findsOneWidget);
+    await tester.ensureVisible(find.text('My Orders'));
+    await tester.tap(find.text('My Orders'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('My Orders'), findsOneWidget);
+    expect(find.text('Order: #3'), findsOneWidget);
+  });
+
+  testWidgets('Profile shows saved support draft state', (
+    WidgetTester tester,
+  ) async {
+    final draftStore = SupportDraftStore();
+    await draftStore.saveDraft(
+      scope: 'user-1',
+      draft: const CustomerSupportDraft(
+        requestType: 'payment',
+        message: 'I need help checking my payment confirmation.',
+      ),
+    );
+
+    await tester.pumpWidget(_buildProfileTestApp());
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('Draft saved'), findsWidgets);
+    expect(find.text('Resume Support Draft'), findsOneWidget);
+  });
+
+  testWidgets('Profile can clear a saved support draft', (
+    WidgetTester tester,
+  ) async {
+    final draftStore = SupportDraftStore();
+    await draftStore.saveDraft(
+      scope: 'user-1',
+      draft: const CustomerSupportDraft(
+        requestType: 'delivery',
+        message: 'Following up on Order #3.',
+        followUp: SupportDraftFollowUp(
+          orderId: 3,
+          status: 'resolved',
+          requestType: 'delivery',
+          supportNote:
+              'Your address update has been applied and this support request is now resolved.',
+          sharedAddress:
+              '56b, 56b Saint 143, Khan 7 Makara, Phnom Penh, Phnom Penh, Cambodia',
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(_buildProfileTestApp());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Resume Support Draft'), findsOneWidget);
+    expect(find.text('View Order #3'), findsOneWidget);
+
+    final clearDraftButton = find.widgetWithText(TextButton, 'Clear draft');
+    await tester.ensureVisible(clearDraftButton);
+    await tester.tap(clearDraftButton);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(find.text('Saved support draft cleared'), findsOneWidget);
+    expect(find.text('Resume Support Draft'), findsNothing);
+    expect(find.text('Customer Support'), findsOneWidget);
+  });
+
+  testWidgets('Profile opens support as a follow-up for the latest update', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      _buildProfileTestApp(
+        orderRepository: _FakeOrderRepository(
+          orders: <Map<String, dynamic>>[
+            <String, dynamic>{
+              'id': 3,
+              'support_request_status': 'resolved',
+              'support_request_history': <Map<String, dynamic>>[
+                <String, dynamic>{
+                  'request_type': 'delivery',
+                  'support_request_status': 'resolved',
+                  'support_request_status_updated_at': '2026-03-17T10:31:59Z',
+                  'support_note':
+                      'Your address update has been applied and this support request is now resolved.',
+                  'support_note_updated_at': '2026-03-17T10:31:59Z',
+                  'support_request_message':
+                      'Order #3 needs a delivery address update.\nMy updated delivery address is: Street 2004, Phnom Penh',
+                },
+              ],
+            },
+          ],
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reopen in Support'), findsWidgets);
+    expect(
+      find.text('Reopen Order #3 in Support - 1 unread update'),
+      findsOneWidget,
+    );
+    final replyInSupportButton = find.text('Reopen in Support').first;
+    await tester.ensureVisible(replyInSupportButton);
+    await tester.tap(replyInSupportButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Customer Support'), findsOneWidget);
+    expect(find.text('Reopening Order #3'), findsOneWidget);
+    expect(find.text('Reopen request'), findsOneWidget);
+    expect(
+      find.textContaining('Address shared: Street 2004, Phnom Penh'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Change password dialog asks for the current password', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(_buildProfileTestApp());
 
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Change Password'));
@@ -68,15 +245,9 @@ void main() {
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
-      ChangeNotifierProvider<AuthenticationProvider>(
-        create: (_) => AuthenticationProvider(
-          useCases: AuthUseCases(
-            _FakeAuthRepository(profileAddress: 'Selected location'),
-          ),
-        ),
-        child: MaterialApp(
-          theme: ThemeData(useMaterial3: false),
-          home: const UserProfileScreen(),
+      _buildProfileTestApp(
+        authRepository: _FakeAuthRepository(
+          profileAddress: 'Selected location',
         ),
       ),
     );
@@ -93,15 +264,9 @@ void main() {
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
-      ChangeNotifierProvider<AuthenticationProvider>(
-        create: (_) => AuthenticationProvider(
-          useCases: AuthUseCases(
-            _FakeAuthRepository(profileAddress: '11.56210, 104.88880'),
-          ),
-        ),
-        child: MaterialApp(
-          theme: ThemeData(useMaterial3: false),
-          home: const UserProfileScreen(),
+      _buildProfileTestApp(
+        authRepository: _FakeAuthRepository(
+          profileAddress: '11.56210, 104.88880',
         ),
       ),
     );
@@ -112,6 +277,33 @@ void main() {
     expect(find.text('No delivery address yet'), findsOneWidget);
     expect(find.text('Add Address'), findsOneWidget);
   });
+}
+
+Widget _buildProfileTestApp({
+  AuthRepository? authRepository,
+  OrderRepository? orderRepository,
+}) {
+  return MultiProvider(
+    providers: [
+      ChangeNotifierProvider<AppSettingsProvider>(
+        create: (_) => AppSettingsProvider(),
+      ),
+      ChangeNotifierProvider<AuthenticationProvider>(
+        create: (_) => AuthenticationProvider(
+          useCases: AuthUseCases(authRepository ?? _FakeAuthRepository()),
+        ),
+      ),
+      ChangeNotifierProvider<OrderManagementProvider>(
+        create: (_) => OrderManagementProvider(
+          useCases: OrderUseCases(orderRepository ?? _FakeOrderRepository()),
+        ),
+      ),
+    ],
+    child: MaterialApp(
+      theme: ThemeData(useMaterial3: false),
+      home: const UserProfileScreen(),
+    ),
+  );
 }
 
 class _FakeAuthRepository implements AuthRepository {
@@ -228,4 +420,74 @@ class _FakeAuthRepository implements AuthRepository {
       promoEmailOptIn: promoEmailOptIn ?? false,
     );
   }
+}
+
+class _FakeOrderRepository implements OrderRepository {
+  final List<Map<String, dynamic>> orders;
+
+  _FakeOrderRepository({this.orders = const <Map<String, dynamic>>[]});
+
+  @override
+  Future<int> placeOrder({
+    required String address,
+    required String deliveryType,
+    required String status,
+    required String paymentMethod,
+    required String paymentReference,
+    required String addressDetails,
+    required String promoCode,
+  }) async {
+    return 1;
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> loadOrders() async => orders;
+
+  @override
+  Future<CheckoutPrefill> loadCheckoutPrefill() async =>
+      CheckoutPrefill.empty();
+
+  @override
+  Future<void> saveDefaultAddress({
+    required String userId,
+    required String address,
+  }) async {}
+
+  @override
+  Future<Map<String, dynamic>> validatePromoCode({
+    required String promoCode,
+  }) async => const <String, dynamic>{};
+
+  @override
+  Future<Map<String, dynamic>> generatePayWayQr({
+    required String tranId,
+    required double amount,
+    required List<CartItem> items,
+    required String callbackUrl,
+    required String currency,
+    required String firstName,
+    required String lastName,
+    required String email,
+    required String phone,
+    required int lifetimeMinutes,
+    required String paymentOption,
+    required String qrImageTemplate,
+  }) async => const <String, dynamic>{};
+
+  @override
+  Future<Map<String, dynamic>> checkPayWayTransaction({
+    required String tranId,
+  }) async => const <String, dynamic>{};
+
+  @override
+  Future<void> savePayWayTransaction({
+    required String tranId,
+    int? orderId,
+    required double amount,
+    required String currency,
+    required Map<String, dynamic> checkResponse,
+  }) async {}
+
+  @override
+  bool isPayWayApproved(Map<String, dynamic> checkResponse) => false;
 }

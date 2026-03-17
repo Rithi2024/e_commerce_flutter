@@ -2100,6 +2100,107 @@ as $$
   order by o.created_at desc;
 $$;
 
+drop function if exists public.rpc_get_order_support_statuses();
+
+create or replace function public.rpc_get_order_support_statuses()
+returns table (
+  request_id bigint,
+  order_id bigint,
+  request_type text,
+  support_request_status text,
+  support_request_status_updated_at timestamptz,
+  support_request_created_at timestamptz,
+  support_request_message text,
+  support_note text,
+  support_note_updated_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with own_orders as (
+    select o.id
+    from public.orders o
+    where o.user_id = auth.uid()
+  ),
+  support_requests as (
+    select
+      l.id::bigint as request_id,
+      coalesce(
+        case
+          when trim(coalesce(l.metadata->>'linked_order_id', '')) ~ '^\d+$'
+            then trim(coalesce(l.metadata->>'linked_order_id', ''))::bigint
+          else null
+        end,
+        nullif(
+          (regexp_match(l.message, 'Order\s*#\s*(\d+)'))[1],
+          ''
+        )::bigint
+      ) as order_id,
+      case
+        when lower(coalesce(l.metadata->>'support_status', 'pending')) in ('address_applied', 'resolved')
+          then lower(coalesce(l.metadata->>'support_status', 'pending'))
+        else 'pending'
+      end::text as support_request_status,
+      coalesce(l.metadata->>'request_type', 'general')::text as request_type,
+      nullif(trim(coalesce(l.metadata->>'support_status_updated_at', '')), '')::timestamptz
+        as support_request_status_updated_at,
+      l.created_at as support_request_created_at,
+      l.message::text as support_request_message,
+      nullif(trim(coalesce(l.metadata->>'support_note', '')), '')::text
+        as support_note,
+      nullif(trim(coalesce(l.metadata->>'support_note_updated_at', '')), '')::timestamptz
+        as support_note_updated_at,
+      greatest(
+        coalesce(
+          nullif(trim(coalesce(l.metadata->>'support_status_updated_at', '')), '')::timestamptz,
+          l.created_at
+        ),
+        coalesce(
+          nullif(trim(coalesce(l.metadata->>'support_note_updated_at', '')), '')::timestamptz,
+          l.created_at
+        )
+      ) as sort_at,
+      l.created_at,
+      l.id
+    from public.app_logs l
+    where lower(l.feature) = 'customer_support'
+      and lower(l.action) = 'request_submitted'
+      and l.user_id = auth.uid()
+  ),
+  scoped_support as (
+    select
+      s.request_id,
+      s.order_id,
+      s.request_type,
+      s.support_request_status,
+      s.support_request_status_updated_at,
+      s.support_request_created_at,
+      s.support_request_message,
+      s.support_note,
+      s.support_note_updated_at,
+      s.sort_at,
+      s.created_at,
+      s.id
+    from support_requests s
+    join own_orders o on o.id = s.order_id
+    where s.order_id is not null
+  )
+  select
+    request_id,
+    order_id,
+    request_type,
+    support_request_status,
+    support_request_status_updated_at,
+    support_request_created_at,
+    support_request_message,
+    support_note,
+    support_note_updated_at
+  from scoped_support
+  order by order_id desc, sort_at desc nulls last, created_at desc, id desc;
+$$;
+
 create or replace function public.rpc_admin_create_product(
   p_name text,
   p_price numeric,
@@ -2564,6 +2665,60 @@ begin
 end;
 $$;
 
+drop function if exists public.rpc_staff_update_order_address(bigint, text, text);
+
+create or replace function public.rpc_staff_update_order_address(
+  p_order_id bigint,
+  p_address text,
+  p_address_details text default ''
+)
+returns public.orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_address text := trim(coalesce(p_address, ''));
+  v_address_details text := trim(coalesce(p_address_details, ''));
+  v_order public.orders;
+begin
+  if not (public.is_admin(auth.uid()) or public.is_support_agent(auth.uid())) then
+    raise exception 'Admin or support agent only';
+  end if;
+
+  if p_order_id is null then
+    raise exception 'Order id is required';
+  end if;
+
+  if v_address = '' then
+    raise exception 'Address is required';
+  end if;
+
+  select *
+  into v_order
+  from public.orders o
+  where o.id = p_order_id
+  for update;
+
+  if v_order.id is null then
+    raise exception 'Order not found';
+  end if;
+
+  if lower(trim(coalesce(v_order.status, ''))) = 'cancelled' then
+    raise exception 'Cancelled order cannot be updated';
+  end if;
+
+  update public.orders o
+  set
+    address = v_address,
+    address_details = v_address_details
+  where o.id = p_order_id
+  returning * into v_order;
+
+  return v_order;
+end;
+$$;
+
 drop function if exists public.rpc_staff_reply_product_rating(uuid, text, text);
 
 create or replace function public.rpc_staff_reply_product_rating(
@@ -2640,6 +2795,10 @@ returns table (
   message text,
   session_id text,
   is_anonymous boolean,
+  status text,
+  status_updated_at timestamptz,
+  support_note text,
+  support_note_updated_at timestamptz,
   created_at timestamptz
 )
 language plpgsql
@@ -2664,11 +2823,105 @@ begin
       when lower(coalesce(l.metadata->>'anonymous', '')) in ('false', 'f', '0', 'no') then false
       else true
     end,
+    case
+      when lower(coalesce(l.metadata->>'support_status', 'pending')) in ('address_applied', 'resolved')
+        then lower(coalesce(l.metadata->>'support_status', 'pending'))
+      else 'pending'
+    end::text,
+    nullif(trim(coalesce(l.metadata->>'support_status_updated_at', '')), '')::timestamptz,
+    nullif(trim(coalesce(l.metadata->>'support_note', '')), '')::text,
+    nullif(trim(coalesce(l.metadata->>'support_note_updated_at', '')), '')::timestamptz,
     l.created_at::timestamptz
   from public.app_logs l
   where lower(l.feature) = 'customer_support'
     and lower(l.action) = 'request_submitted'
   order by l.created_at desc;
+end;
+$$;
+
+drop function if exists public.rpc_staff_update_support_request_status(bigint, text);
+drop function if exists public.rpc_staff_update_support_request_status(bigint, text, text);
+
+create or replace function public.rpc_staff_update_support_request_status(
+  p_request_id bigint,
+  p_status text,
+  p_note text default null
+)
+returns public.app_logs
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_status text := lower(trim(coalesce(p_status, '')));
+  v_note text;
+  v_log public.app_logs;
+begin
+  if not (public.is_admin(auth.uid()) or public.is_support_agent(auth.uid())) then
+    raise exception 'Admin or support agent only';
+  end if;
+
+  if p_request_id is null then
+    raise exception 'Request id is required';
+  end if;
+
+  if v_status not in ('pending', 'address_applied', 'resolved') then
+    raise exception 'Invalid support request status';
+  end if;
+
+  if p_note is not null then
+    v_note := trim(p_note);
+  else
+    v_note := null;
+  end if;
+
+  update public.app_logs l
+  set metadata = case
+        when p_note is null then
+          jsonb_set(
+            jsonb_set(
+              coalesce(l.metadata, '{}'::jsonb),
+              '{support_status}',
+              to_jsonb(v_status),
+              true
+            ),
+            '{support_status_updated_at}',
+            to_jsonb(now()),
+            true
+          )
+        else
+          jsonb_set(
+            jsonb_set(
+              jsonb_set(
+                jsonb_set(
+                  coalesce(l.metadata, '{}'::jsonb),
+                  '{support_status}',
+                  to_jsonb(v_status),
+                  true
+                ),
+                '{support_status_updated_at}',
+                to_jsonb(now()),
+                true
+              ),
+              '{support_note}',
+              to_jsonb(v_note),
+              true
+            ),
+            '{support_note_updated_at}',
+            to_jsonb(now()),
+            true
+          )
+      end
+  where l.id = p_request_id
+    and lower(l.feature) = 'customer_support'
+    and lower(l.action) = 'request_submitted'
+  returning * into v_log;
+
+  if v_log.id is null then
+    raise exception 'Support request not found';
+  end if;
+
+  return v_log;
 end;
 $$;
 
@@ -2797,15 +3050,26 @@ create or replace function public.rpc_app_log(
 )
 returns bigint
 language plpgsql
-security invoker
+security definer
 set search_path = public
 as $$
 declare
   v_log_id bigint;
   v_level text := lower(coalesce(trim(p_level), 'info'));
+  v_actor_id uuid := auth.uid();
+  v_log_user_id uuid;
 begin
   if v_level not in ('info', 'warning', 'error') then
     v_level := 'info';
+  end if;
+
+  if p_user_id is not null then
+    if v_actor_id is null or v_actor_id is distinct from p_user_id then
+      raise exception 'Cannot log events for another user';
+    end if;
+    v_log_user_id := p_user_id;
+  else
+    v_log_user_id := v_actor_id;
   end if;
 
   insert into public.app_logs (
@@ -2822,7 +3086,7 @@ begin
     coalesce(nullif(trim(p_action), ''), 'event'),
     coalesce(p_message, ''),
     coalesce(p_metadata, '{}'::jsonb),
-    p_user_id
+    v_log_user_id
   )
   returning id into v_log_id;
 
@@ -3198,6 +3462,8 @@ grant execute on function public.rpc_cart_total() to authenticated;
 grant execute on function public.rpc_validate_promo_code(text) to authenticated;
 grant execute on function public.rpc_place_order(text, text, text, text, text, text, text) to authenticated;
 grant execute on function public.rpc_get_orders() to authenticated;
+revoke all on function public.rpc_get_order_support_statuses() from public;
+grant execute on function public.rpc_get_order_support_statuses() to authenticated;
 grant execute on function public.rpc_upsert_payway_transaction(text, bigint, numeric, text, jsonb) to authenticated;
 grant execute on function public.rpc_get_active_event() to anon, authenticated;
 grant execute on function public.rpc_app_log(text, text, text, text, jsonb, uuid) to anon, authenticated;
@@ -3221,10 +3487,14 @@ revoke all on function public.rpc_admin_confirm_cash_payment(bigint) from public
 grant execute on function public.rpc_admin_confirm_cash_payment(bigint) to authenticated;
 revoke all on function public.rpc_staff_update_order_status(bigint, text) from public;
 grant execute on function public.rpc_staff_update_order_status(bigint, text) to authenticated;
+revoke all on function public.rpc_staff_update_order_address(bigint, text, text) from public;
+grant execute on function public.rpc_staff_update_order_address(bigint, text, text) to authenticated;
 revoke all on function public.rpc_staff_reply_product_rating(uuid, text, text) from public;
 grant execute on function public.rpc_staff_reply_product_rating(uuid, text, text) to authenticated;
 revoke all on function public.rpc_staff_list_support_requests() from public;
 grant execute on function public.rpc_staff_list_support_requests() to authenticated;
+revoke all on function public.rpc_staff_update_support_request_status(bigint, text, text) from public;
+grant execute on function public.rpc_staff_update_support_request_status(bigint, text, text) to authenticated;
 revoke all on function public.rpc_staff_update_order_delivery_location(bigint, double precision, double precision, text) from public;
 grant execute on function public.rpc_staff_update_order_delivery_location(bigint, double precision, double precision, text) to authenticated;
 revoke all on function public.rpc_admin_list_events() from public;
