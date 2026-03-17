@@ -108,7 +108,11 @@ fi
 if [[ -z "${WEB_MAPS_KEY}" ]]; then
   echo "Warning: GOOGLE_MAPS_WEB_API_KEY is empty; web map features will stay disabled until it is set." >&2
 fi
-sed "s|${WEB_MAPS_PLACEHOLDER}|${WEB_MAPS_KEY}|g" "${WEB_INDEX_BACKUP}" > "${WEB_INDEX_FILE}"
+if [[ -z "${WEB_MAPS_KEY}" ]]; then
+  sed "/maps.googleapis.com\/maps\/api\/js/d" "${WEB_INDEX_BACKUP}" > "${WEB_INDEX_FILE}"
+else
+  sed "s|${WEB_MAPS_PLACEHOLDER}|${WEB_MAPS_KEY}|g" "${WEB_INDEX_BACKUP}" > "${WEB_INDEX_FILE}"
+fi
 
 cd "${ROOT_DIR}"
 flutter run -d "${DEVICE}" --dart-define-from-file="${GENERATED_ENV_FILE}"

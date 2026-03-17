@@ -156,6 +156,7 @@ Android and iOS keys stay platform-local. Web helper builds can read the web key
   - `ios/Flutter/Debug.xcconfig`
   - `ios/Flutter/Release.xcconfig`
 - Web helper builds and local helper runs: set `GOOGLE_MAPS_WEB_API_KEY` in `.env` or your Vercel env
+  If it is unset, the helper scripts remove the Google Maps web script and web map features stay disabled cleanly.
 - Direct local `flutter run -d chrome` without helpers: replace `YOUR_GOOGLE_MAPS_WEB_API_KEY` in `web/index.html`
 
 ## 9. Run the App

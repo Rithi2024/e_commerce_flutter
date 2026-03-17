@@ -133,7 +133,15 @@ if ([string]::IsNullOrWhiteSpace($webMapsKey)) {
 }
 
 $webIndexContent = Get-Content $webIndexPath -Raw
-$webIndexContent = $webIndexContent.Replace($mapsPlaceholder, $webMapsKey)
+if ([string]::IsNullOrWhiteSpace($webMapsKey)) {
+  $webIndexContent = [System.Text.RegularExpressions.Regex]::Replace(
+    $webIndexContent,
+    '(?m)^\s*<script src="https://maps\.googleapis\.com/maps/api/js\?key=YOUR_GOOGLE_MAPS_WEB_API_KEY"></script>\r?\n?',
+    ''
+  )
+} else {
+  $webIndexContent = $webIndexContent.Replace($mapsPlaceholder, $webMapsKey)
+}
 Set-Content -Path $webIndexPath -Value $webIndexContent
 
 try {
