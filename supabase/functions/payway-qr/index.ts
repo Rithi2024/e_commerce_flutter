@@ -1,3 +1,15 @@
+import {
+  createRequestContext,
+  durationMs,
+  logError,
+  logInfo,
+  logWarning,
+  maskEmail,
+  maskPhone,
+  safeError,
+  truncate,
+} from "../_shared/logging.ts";
+
 type JsonObject = Record<string, unknown>;
 
 const runtimeDeno = (globalThis as unknown as {
@@ -175,6 +187,7 @@ async function postPayWay(
 }
 
 async function handleGenerateQr(
+  context: { requestId: string; startedAtMs: number },
   body: JsonObject,
   merchantId: string,
   apiKey: string,
@@ -183,12 +196,29 @@ async function handleGenerateQr(
   const tranId = asString(body["tran_id"]);
   const amount = asNumber(body["amount"]);
   if (tranId.length === 0) {
+    logWarning("payway.generate_qr.invalid_tran_id", {
+      requestId: context.requestId,
+      reason: "missing",
+      durationMs: durationMs(context),
+    });
     return jsonResponse(400, { error: "tran_id is required" });
   }
   if (tranId.length > 20) {
+    logWarning("payway.generate_qr.invalid_tran_id", {
+      requestId: context.requestId,
+      tranId,
+      reason: "too_long",
+      durationMs: durationMs(context),
+    });
     return jsonResponse(400, { error: "tran_id must be 20 characters or less" });
   }
   if (!Number.isFinite(amount) || amount <= 0) {
+    logWarning("payway.generate_qr.invalid_amount", {
+      requestId: context.requestId,
+      tranId,
+      amount: Number.isFinite(amount) ? amount : undefined,
+      durationMs: durationMs(context),
+    });
     return jsonResponse(400, { error: "amount must be a valid positive number" });
   }
 
@@ -237,6 +267,25 @@ async function handleGenerateQr(
   if (returnParams.length > 0) payloadBase["return_params"] = returnParams;
   if (payout.length > 0) payloadBase["payout"] = payout;
 
+  logInfo("payway.generate_qr.started", {
+    requestId: context.requestId,
+    tranId,
+    amount: normalizedAmount,
+    currency,
+    purchaseType,
+    paymentOption,
+    email: email.length > 0 ? maskEmail(email) : undefined,
+    phone: phone.length > 0 ? maskPhone(phone) : undefined,
+    hasItems: items.length > 0,
+    hasCallbackUrl: callbackUrl.length > 0,
+    hasReturnDeeplink: returnDeeplink.length > 0,
+    hasCustomFields: customFields.length > 0,
+    hasReturnParams: returnParams.length > 0,
+    hasPayout: payout.length > 0,
+    lifetime,
+    qrImageTemplate,
+  });
+
   const amountHashCandidates = uniqueStrings([
     normalizedAmount.toString(),
     formatAmountForHash(normalizedAmount),
@@ -252,7 +301,14 @@ async function handleGenerateQr(
     },
   };
 
-  for (const amountForHash of amountHashCandidates) {
+  for (const [index, amountForHash] of amountHashCandidates.entries()) {
+    const attempt = index + 1;
+    logInfo("payway.generate_qr.attempt", {
+      requestId: context.requestId,
+      tranId,
+      attempt,
+      amountForHash,
+    });
     const hashInput = reqTime + merchantId + tranId + amountForHash + items +
       firstName + lastName + email + phone + purchaseType + paymentOption +
       callbackUrl + returnDeeplink + currency + customFields + returnParams +
@@ -267,9 +323,36 @@ async function handleGenerateQr(
     finalData = data;
 
     if (!isWrongHashResponse(data)) {
+      logInfo("payway.generate_qr.attempt_completed", {
+        requestId: context.requestId,
+        tranId,
+        attempt,
+        httpStatus: status,
+        paywayStatusCode: payWayStatusCode(data),
+        paywayStatusMessage: truncate(payWayStatusMessage(data), 120),
+      });
       break;
     }
+
+    logWarning("payway.generate_qr.retry_wrong_hash", {
+      requestId: context.requestId,
+      tranId,
+      attempt,
+      httpStatus: status,
+      paywayStatusCode: payWayStatusCode(data),
+      paywayStatusMessage: truncate(payWayStatusMessage(data), 120),
+      amountForHash,
+    });
   }
+
+  logInfo("payway.generate_qr.completed", {
+    requestId: context.requestId,
+    tranId,
+    httpStatus: finalStatus,
+    paywayStatusCode: payWayStatusCode(finalData),
+    paywayStatusMessage: truncate(payWayStatusMessage(finalData), 120),
+    durationMs: durationMs(context),
+  });
 
   return jsonResponse(finalStatus, {
     operation: "generate_qr",
@@ -279,6 +362,7 @@ async function handleGenerateQr(
 }
 
 async function handleCheckTransaction(
+  context: { requestId: string; startedAtMs: number },
   body: JsonObject,
   merchantId: string,
   apiKey: string,
@@ -286,11 +370,27 @@ async function handleCheckTransaction(
 ): Promise<Response> {
   const tranId = asString(body["tran_id"]);
   if (tranId.length === 0) {
+    logWarning("payway.check_transaction.invalid_tran_id", {
+      requestId: context.requestId,
+      reason: "missing",
+      durationMs: durationMs(context),
+    });
     return jsonResponse(400, { error: "tran_id is required" });
   }
   if (tranId.length > 20) {
+    logWarning("payway.check_transaction.invalid_tran_id", {
+      requestId: context.requestId,
+      tranId,
+      reason: "too_long",
+      durationMs: durationMs(context),
+    });
     return jsonResponse(400, { error: "tran_id must be 20 characters or less" });
   }
+
+  logInfo("payway.check_transaction.started", {
+    requestId: context.requestId,
+    tranId,
+  });
 
   const reqTime = formatUtcReqTime();
   const hashInput = reqTime + merchantId + tranId;
@@ -308,6 +408,15 @@ async function handleCheckTransaction(
     payload,
   );
 
+  logInfo("payway.check_transaction.completed", {
+    requestId: context.requestId,
+    tranId,
+    httpStatus: status,
+    paywayStatusCode: payWayStatusCode(data),
+    paywayStatusMessage: truncate(payWayStatusMessage(data), 120),
+    durationMs: durationMs(context),
+  });
+
   return jsonResponse(status, {
     operation: "check_transaction",
     tran_id: tranId,
@@ -316,12 +425,32 @@ async function handleCheckTransaction(
 }
 
 runtimeDeno.serve(async (req: Request): Promise<Response> => {
+  const context = createRequestContext(req, "payway_qr");
   if (req.method === "OPTIONS") {
+    logInfo("payway.request_preflight", {
+      requestId: context.requestId,
+      durationMs: durationMs(context),
+    });
     return new Response("ok", { headers: corsHeaders });
   }
   if (req.method !== "POST") {
+    logWarning("payway.method_not_allowed", {
+      requestId: context.requestId,
+      method: req.method,
+      durationMs: durationMs(context),
+    });
     return jsonResponse(405, { error: "Method not allowed" });
   }
+
+  logInfo("payway.request_received", {
+    requestId: context.requestId,
+    scope: context.scope,
+    method: context.method,
+    path: context.path,
+    clientIp: context.clientIp,
+    hasAuthorizationHeader: context.hasAuthorizationHeader,
+    userAgent: context.userAgent,
+  });
 
   const merchantId = asString(runtimeDeno.env.get("PAYWAY_MERCHANT_ID"));
   const apiKey = asString(runtimeDeno.env.get("PAYWAY_API_KEY"));
@@ -330,6 +459,13 @@ runtimeDeno.serve(async (req: Request): Promise<Response> => {
     "https://checkout-sandbox.payway.com.kh"
   ).replace(/\/+$/, "");
   if (merchantId.length === 0 || apiKey.length === 0) {
+    logError("payway.missing_configuration", {
+      requestId: context.requestId,
+      hasMerchantId: merchantId.length > 0,
+      hasApiKey: apiKey.length > 0,
+      baseUrl,
+      durationMs: durationMs(context),
+    });
     return jsonResponse(500, {
       error:
         "Missing PAYWAY_MERCHANT_ID or PAYWAY_API_KEY in Edge Function secrets",
@@ -342,23 +478,54 @@ runtimeDeno.serve(async (req: Request): Promise<Response> => {
     if (raw && typeof raw === "object") {
       body = raw as JsonObject;
     }
-  } catch (_) {
+  } catch (error) {
+    logWarning("payway.invalid_json_body", {
+      requestId: context.requestId,
+      durationMs: durationMs(context),
+      error: safeError(error),
+    });
     return jsonResponse(400, { error: "Invalid JSON body" });
   }
 
   const operation = asString(body["operation"]).toLowerCase() || "generate_qr";
+  logInfo("payway.operation_resolved", {
+    requestId: context.requestId,
+    operation,
+    tranId: asString(body["tran_id"]) || undefined,
+    amount: Number.isFinite(asNumber(body["amount"])) ? asNumber(body["amount"]) : undefined,
+    currency: asString(body["currency"]).toUpperCase() || undefined,
+    email: asString(body["email"]).length > 0 ? maskEmail(body["email"]) : undefined,
+    phone: asString(body["phone"]).length > 0 ? maskPhone(body["phone"]) : undefined,
+  });
   try {
     if (operation === "generate_qr") {
-      return await handleGenerateQr(body, merchantId, apiKey, baseUrl);
+      return await handleGenerateQr(context, body, merchantId, apiKey, baseUrl);
     }
     if (operation === "check_transaction") {
-      return await handleCheckTransaction(body, merchantId, apiKey, baseUrl);
+      return await handleCheckTransaction(
+        context,
+        body,
+        merchantId,
+        apiKey,
+        baseUrl,
+      );
     }
 
+    logWarning("payway.unsupported_operation", {
+      requestId: context.requestId,
+      operation,
+      durationMs: durationMs(context),
+    });
     return jsonResponse(400, {
       error: "Unsupported operation. Use generate_qr or check_transaction",
     });
   } catch (error) {
+    logError("payway.unexpected_error", {
+      requestId: context.requestId,
+      operation,
+      durationMs: durationMs(context),
+      error: safeError(error),
+    });
     return jsonResponse(500, {
       error: "Unexpected server error",
       message: error instanceof Error ? error.message : "unknown",

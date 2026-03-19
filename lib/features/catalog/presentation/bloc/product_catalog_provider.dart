@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 enum CatalogSortOption {
   newest,
+  bestDeals,
   priceLowToHigh,
   priceHighToLow,
   popular,
@@ -22,6 +23,8 @@ extension CatalogSortOptionX on CatalogSortOption {
     switch (this) {
       case CatalogSortOption.newest:
         return 'Newest';
+      case CatalogSortOption.bestDeals:
+        return 'Best deals';
       case CatalogSortOption.priceLowToHigh:
         return 'Price low-high';
       case CatalogSortOption.priceHighToLow:
@@ -41,6 +44,7 @@ enum CatalogCollectionFilter {
   bestSellers,
   newArrivals,
   underTwentyFive,
+  eventDeals,
 }
 
 extension CatalogCollectionFilterX on CatalogCollectionFilter {
@@ -54,6 +58,8 @@ extension CatalogCollectionFilterX on CatalogCollectionFilter {
         return 'New arrivals';
       case CatalogCollectionFilter.underTwentyFive:
         return 'Under \$25';
+      case CatalogCollectionFilter.eventDeals:
+        return 'Event deals';
     }
   }
 
@@ -67,6 +73,8 @@ extension CatalogCollectionFilterX on CatalogCollectionFilter {
         return 'new-arrivals';
       case CatalogCollectionFilter.underTwentyFive:
         return 'under-25';
+      case CatalogCollectionFilter.eventDeals:
+        return 'event-deals';
     }
   }
 }
@@ -82,6 +90,8 @@ CatalogCollectionFilter? catalogCollectionFilterFromSlug(String? raw) {
       return CatalogCollectionFilter.newArrivals;
     case 'under-25':
       return CatalogCollectionFilter.underTwentyFive;
+    case 'event-deals':
+      return CatalogCollectionFilter.eventDeals;
     default:
       return null;
   }
@@ -108,6 +118,7 @@ class ProductCatalogProvider extends ChangeNotifier {
   static const int _loadMoreCount = 30;
   static const String _prefsRecentlyViewedProductIds =
       'product_catalog.recently_viewed_product_ids';
+  static const String _prefsRecentSearches = 'product_catalog.recent_searches';
 
   final ProductUseCases _useCases;
   final LogUseCases? _logUseCases;
@@ -140,8 +151,13 @@ class ProductCatalogProvider extends ChangeNotifier {
   final List<String> _recentlyViewedProductIds = <String>[];
   final Map<String, Product> _recentlyViewedProductSnapshots =
       <String, Product>{};
+  final List<String> _recentSearches = <String>[];
+  final Set<String> _eventDealProductIds = <String>{};
+  final Map<String, double> _eventDealDiscountPercentByProductId =
+      <String, double>{};
   CatalogCollectionFilter? _activeCollectionFilter;
   bool _recentlyViewedLoaded = false;
+  bool _recentSearchesLoaded = false;
 
   String query = '';
   String category = 'All';
@@ -229,6 +245,43 @@ class ProductCatalogProvider extends ChangeNotifier {
     return List<Product>.unmodifiable(products);
   }
 
+  List<String> get recentSearches => List<String>.unmodifiable(_recentSearches);
+
+  List<String> searchSuggestions({String? seed, int limit = 6}) {
+    if (limit <= 0) {
+      return const <String>[];
+    }
+
+    final normalizedSeed = _normalizeSearchQuery(seed ?? query);
+    if (normalizedSeed.isEmpty) {
+      return _recentSearches.take(limit).toList(growable: false);
+    }
+
+    final needle = normalizedSeed.toLowerCase();
+    final suggestions = <String>[];
+
+    void addCandidates(Iterable<String> source) {
+      for (final candidate in _rankedSearchMatches(source, needle)) {
+        final normalizedCandidate = _normalizeSearchQuery(candidate);
+        if (normalizedCandidate.isEmpty) continue;
+        final exists = suggestions.any(
+          (value) => value.toLowerCase() == normalizedCandidate.toLowerCase(),
+        );
+        if (exists) continue;
+        suggestions.add(normalizedCandidate);
+        if (suggestions.length >= limit) {
+          return;
+        }
+      }
+    }
+
+    addCandidates(_recentSearches);
+    addCandidates(_all.map((product) => product.name));
+    addCandidates(_all.map((product) => product.category ?? ''));
+
+    return suggestions.take(limit).toList(growable: false);
+  }
+
   bool isBestSeller(String productId) {
     return _bestSellerProductIds.contains(productId.trim());
   }
@@ -288,6 +341,7 @@ class ProductCatalogProvider extends ChangeNotifier {
 
     try {
       await _loadRecentlyViewedIfNeeded();
+      await _loadRecentSearchesIfNeeded();
       _all = await _useCases.fetchProducts(query: '', category: 'All');
       _syncRecentlyViewedWithCatalog();
       try {
@@ -378,12 +432,59 @@ class ProductCatalogProvider extends ChangeNotifier {
   }
 
   void setQuery(String q) {
-    if (query == q) {
+    final normalized = _normalizeSearchQuery(q);
+    if (query == normalized) {
       return;
     }
-    query = q;
+    query = normalized;
     applyFilters();
     notifyListeners();
+  }
+
+  void useSearchTerm(String raw, {bool persist = true}) {
+    final normalized = _normalizeSearchQuery(raw);
+    final hadQueryChange = query != normalized;
+    if (hadQueryChange) {
+      query = normalized;
+      applyFilters();
+      notifyListeners();
+    }
+
+    if (!persist || normalized.isEmpty) {
+      return;
+    }
+
+    unawaited(_rememberRecentSearch(normalized));
+    _logInfo(
+      action: 'apply_search_term',
+      metadata: {'query': normalized, 'resultCount': _filtered.length},
+    );
+  }
+
+  Future<void> removeRecentSearch(String raw) async {
+    final normalized = _normalizeSearchQuery(raw);
+    if (normalized.isEmpty) return;
+
+    final next = _recentSearches
+        .where((value) => value.toLowerCase() != normalized.toLowerCase())
+        .toList();
+    if (next.length == _recentSearches.length) {
+      return;
+    }
+    _recentSearches
+      ..clear()
+      ..addAll(next);
+    notifyListeners();
+    await _persistRecentSearches();
+  }
+
+  Future<void> clearRecentSearches() async {
+    if (_recentSearches.isEmpty) {
+      return;
+    }
+    _recentSearches.clear();
+    notifyListeners();
+    await _persistRecentSearches();
   }
 
   Future<void> setSortOption(CatalogSortOption next) async {
@@ -457,9 +558,55 @@ class ProductCatalogProvider extends ChangeNotifier {
       case CatalogCollectionFilter.underTwentyFive:
         sortOption = CatalogSortOption.priceLowToHigh;
         break;
+      case CatalogCollectionFilter.eventDeals:
+        sortOption = CatalogSortOption.bestDeals;
+        break;
     }
     applyFilters();
     notifyListeners();
+  }
+
+  void setEventDealProductIds(
+    Iterable<String> productIds, {
+    Map<String, double>? discountPercents,
+  }) {
+    final next = productIds
+        .map((productId) => productId.trim())
+        .where((productId) => productId.isNotEmpty)
+        .toSet();
+    final nextDiscounts = <String, double>{
+      for (final productId in next)
+        productId: (discountPercents?[productId] ?? 0).clamp(0, 95).toDouble(),
+    };
+    final same =
+        next.length == _eventDealProductIds.length &&
+        _eventDealProductIds.containsAll(next) &&
+        nextDiscounts.length == _eventDealDiscountPercentByProductId.length &&
+        nextDiscounts.entries.every(
+          (entry) =>
+              _eventDealDiscountPercentByProductId[entry.key] == entry.value,
+        );
+    if (same) {
+      return;
+    }
+    _eventDealProductIds
+      ..clear()
+      ..addAll(next);
+    _eventDealDiscountPercentByProductId
+      ..clear()
+      ..addAll(nextDiscounts);
+    if (_activeCollectionFilter == CatalogCollectionFilter.eventDeals) {
+      applyFilters();
+    }
+    notifyListeners();
+  }
+
+  void showEventDeals(
+    Iterable<String> productIds, {
+    Map<String, double>? discountPercents,
+  }) {
+    setEventDealProductIds(productIds, discountPercents: discountPercents);
+    showCollection(CatalogCollectionFilter.eventDeals);
   }
 
   void setCategory(String c) {
@@ -655,6 +802,32 @@ class ProductCatalogProvider extends ChangeNotifier {
     switch (sortOption) {
       case CatalogSortOption.newest:
         _filtered.sort((a, b) {
+          final aCreated =
+              a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bCreated =
+              b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bCreated.compareTo(aCreated);
+        });
+        break;
+      case CatalogSortOption.bestDeals:
+        _filtered.sort((a, b) {
+          final aDiscount = _eventDealDiscountPercentByProductId[a.id] ?? 0;
+          final bDiscount = _eventDealDiscountPercentByProductId[b.id] ?? 0;
+          final discountCompare = bDiscount.compareTo(aDiscount);
+          if (discountCompare != 0) {
+            return discountCompare;
+          }
+          final aSavings = a.price * (aDiscount / 100);
+          final bSavings = b.price * (bDiscount / 100);
+          final savingsCompare = bSavings.compareTo(aSavings);
+          if (savingsCompare != 0) {
+            return savingsCompare;
+          }
+          final aPopular = isBestSeller(a.id) ? 1 : 0;
+          final bPopular = isBestSeller(b.id) ? 1 : 0;
+          if (aPopular != bPopular) {
+            return bPopular.compareTo(aPopular);
+          }
           final aCreated =
               a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
           final bCreated =
@@ -879,6 +1052,8 @@ class ProductCatalogProvider extends ChangeNotifier {
         return isNewArrival(product);
       case CatalogCollectionFilter.underTwentyFive:
         return product.price <= 25;
+      case CatalogCollectionFilter.eventDeals:
+        return _eventDealProductIds.contains(product.id);
     }
   }
 
@@ -902,6 +1077,22 @@ class ProductCatalogProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
+  Future<void> _loadRecentSearchesIfNeeded() async {
+    if (_recentSearchesLoaded) {
+      return;
+    }
+    _recentSearchesLoaded = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final stored = _normalizeSearchEntries(
+        prefs.getStringList(_prefsRecentSearches) ?? const <String>[],
+      );
+      _recentSearches
+        ..clear()
+        ..addAll(stored);
+    } catch (_) {}
+  }
+
   Future<void> _persistRecentlyViewed() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -909,6 +1100,13 @@ class ProductCatalogProvider extends ChangeNotifier {
         _prefsRecentlyViewedProductIds,
         _recentlyViewedProductIds,
       );
+    } catch (_) {}
+  }
+
+  Future<void> _persistRecentSearches() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_prefsRecentSearches, _recentSearches);
     } catch (_) {}
   }
 
@@ -950,6 +1148,79 @@ class ProductCatalogProvider extends ChangeNotifier {
       }
     }
     return result;
+  }
+
+  Future<void> _rememberRecentSearch(String raw) async {
+    final normalized = _normalizeSearchQuery(raw);
+    if (normalized.isEmpty) {
+      return;
+    }
+
+    final existingIndex = _recentSearches.indexWhere(
+      (value) => value.toLowerCase() == normalized.toLowerCase(),
+    );
+    final unchanged =
+        existingIndex == 0 &&
+        _recentSearches.isNotEmpty &&
+        _recentSearches.first == normalized;
+    if (unchanged) {
+      return;
+    }
+
+    if (existingIndex >= 0) {
+      _recentSearches.removeAt(existingIndex);
+    }
+    _recentSearches.insert(0, normalized);
+    if (_recentSearches.length > 8) {
+      _recentSearches.removeRange(8, _recentSearches.length);
+    }
+    notifyListeners();
+    await _persistRecentSearches();
+  }
+
+  List<String> _normalizeSearchEntries(Iterable<String> source) {
+    final result = <String>[];
+    for (final raw in source) {
+      final normalized = _normalizeSearchQuery(raw);
+      if (normalized.isEmpty) continue;
+      final exists = result.any(
+        (value) => value.toLowerCase() == normalized.toLowerCase(),
+      );
+      if (exists) continue;
+      result.add(normalized);
+      if (result.length >= 8) {
+        break;
+      }
+    }
+    return result;
+  }
+
+  List<String> _rankedSearchMatches(Iterable<String> source, String needle) {
+    final matches = source
+        .map(_normalizeSearchQuery)
+        .where((value) => value.isNotEmpty)
+        .where((value) => value.toLowerCase().contains(needle))
+        .toSet()
+        .toList();
+    matches.sort((a, b) {
+      final aLower = a.toLowerCase();
+      final bLower = b.toLowerCase();
+      final aStarts = aLower.startsWith(needle) ? 1 : 0;
+      final bStarts = bLower.startsWith(needle) ? 1 : 0;
+      if (aStarts != bStarts) {
+        return bStarts.compareTo(aStarts);
+      }
+      final lengthCompare = a.length.compareTo(b.length);
+      if (lengthCompare != 0) {
+        return lengthCompare;
+      }
+      return aLower.compareTo(bLower);
+    });
+    return matches;
+  }
+
+  String _normalizeSearchQuery(String raw) {
+    return raw.trim().replaceAll(RegExp(r'\s+'), ' ');
   }
 
   double? _normalizeMinPrice(double value) {

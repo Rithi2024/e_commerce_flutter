@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -57,11 +59,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Shop all categories'), findsNothing);
-      expect(find.text('Search catalog'), findsOneWidget);
-      expect(find.text('Search products or categories'), findsOneWidget);
-      expect(find.text('Price, stock, more'), findsOneWidget);
-      expect(find.text('Everyday Runner'), findsWidgets);
-      expect(find.text('Popular'), findsWidgets);
+    expect(find.text('Search catalog'), findsOneWidget);
+    expect(find.text('Search products or categories'), findsOneWidget);
+    expect(find.text('Price, stock, more'), findsOneWidget);
+    expect(find.text('Everyday Runner'), findsWidgets);
+    expect(find.text('Popular'), findsWidgets);
       expect(find.text('Filters'), findsOneWidget);
       expect(find.text('4.8'), findsWidgets);
       expect(find.text('(24)'), findsWidgets);
@@ -99,7 +101,7 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Filters'));
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Filters'));
     await tester.pumpAndSettle();
 
     expect(find.text('Price range'), findsOneWidget);
@@ -109,6 +111,43 @@ void main() {
     expect(find.text('With written reviews'), findsOneWidget);
     expect(find.text('Categories'), findsOneWidget);
     expect(find.text('Apply filters'), findsOneWidget);
+  });
+
+  testWidgets('Recent search chips can reapply saved catalog searches', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'product_catalog.recent_searches': <String>['Runner', 'Shoes'],
+    });
+    final cartProvider = ShoppingCartProvider(
+      useCases: CartUseCases(_FakeCartRepository.empty()),
+    );
+    final productProvider = ProductCatalogProvider(
+      useCases: ProductUseCases(_FakeProductRepository()),
+    );
+    await cartProvider.load();
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      _buildCatalogTestApp(
+        cartProvider: cartProvider,
+        productProvider: productProvider,
+      ),
+    );
+
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Recent searches'), findsOneWidget);
+    expect(find.text('Runner'), findsOneWidget);
+
+    await tester.tap(find.text('Runner'));
+    await tester.pumpAndSettle();
+
+    expect(productProvider.query, 'Runner');
+    expect(find.text('Search: Runner'), findsOneWidget);
+    expect(find.text('Everyday Runner'), findsWidgets);
   });
 
   testWidgets('Scrolling collapses the mobile header to only the search bar', (
@@ -137,7 +176,8 @@ void main() {
 
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -320));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 260));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
 
     expect(find.text('Search products or categories'), findsOneWidget);
     expect(find.text('Search catalog'), findsNothing);
@@ -169,7 +209,7 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Filters'));
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Filters'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('4 stars & up'));
@@ -208,7 +248,7 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Filters'));
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Filters'));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('With written reviews'));
@@ -268,6 +308,66 @@ void main() {
     ]);
   });
 
+  testWidgets('Hero banner opens active event deals collection', (
+    WidgetTester tester,
+  ) async {
+    final now = DateTime.now().toUtc();
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'app_settings.event_discounts': jsonEncode(<Map<String, Object?>>[
+        <String, Object?>{
+          'event_id': 'event-1',
+          'event_title': 'Spring Launch',
+          'product_id': 'shoe-1',
+          'discount_percent': 20,
+          'updated_at': now.toIso8601String(),
+        },
+        <String, Object?>{
+          'event_id': 'event-1',
+          'event_title': 'Spring Launch',
+          'product_id': 'shirt-1',
+          'discount_percent': 15,
+          'updated_at': now.toIso8601String(),
+        },
+      ]),
+    });
+    final productProvider = ProductCatalogProvider(
+      useCases: ProductUseCases(_FakeProductRepositoryWithEvent()),
+    );
+    final cartProvider = ShoppingCartProvider(
+      useCases: CartUseCases(_FakeCartRepository.empty()),
+    );
+    await productProvider.fetchProducts();
+    await cartProvider.load();
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      _buildCatalogTestApp(
+        cartProvider: cartProvider,
+        productProvider: productProvider,
+      ),
+    );
+
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('2 event deals live'), findsOneWidget);
+    expect(find.text('Spring Launch picks'), findsOneWidget);
+    expect(find.text('Spring Launch deal'), findsWidgets);
+    expect(find.widgetWithText(FilledButton, 'Shop event'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Shop event'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Collection: Event deals'), findsOneWidget);
+    expect(productProvider.sortOption, CatalogSortOption.bestDeals);
+    expect(productProvider.activeCollectionLabel, 'Event deals');
+    expect(productProvider.filtered.map((product) => product.id), <String>[
+      'shoe-1',
+      'shirt-1',
+    ]);
+  });
+
   testWidgets('Initial collection filter applies on first load', (
     WidgetTester tester,
   ) async {
@@ -316,9 +416,20 @@ void main() {
   testWidgets('Tapping a product card opens the product detail route', (
     WidgetTester tester,
   ) async {
-    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final now = DateTime.now().toUtc();
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'app_settings.event_discounts': jsonEncode(<Map<String, Object?>>[
+        <String, Object?>{
+          'event_id': 'event-1',
+          'event_title': 'Spring Launch',
+          'product_id': 'shoe-1',
+          'discount_percent': 20,
+          'updated_at': now.toIso8601String(),
+        },
+      ]),
+    });
     final productProvider = ProductCatalogProvider(
-      useCases: ProductUseCases(_FakeProductRepository()),
+      useCases: ProductUseCases(_FakeProductRepositoryWithEvent()),
     );
     final cartProvider = ShoppingCartProvider(
       useCases: CartUseCases(_FakeCartRepository.empty()),
@@ -337,12 +448,37 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Everyday Runner').first);
+    final eventDealCard = find.byKey(
+      const ValueKey<String>('collection-product-card-event-deals-shoe-1'),
+    );
+    expect(eventDealCard, findsOneWidget);
+
+    await tester.ensureVisible(eventDealCard);
+    await tester.pumpAndSettle();
+    await tester.tap(eventDealCard);
     await tester.pumpAndSettle();
 
     expect(find.text('Description'), findsOneWidget);
-    expect(find.text('You May Also Like'), findsOneWidget);
+    expect(find.text('Included in Spring Launch'), findsOneWidget);
+    expect(find.text('More Spring Launch deals'), findsOneWidget);
+    expect(find.text('Spring Launch pricing applied'), findsOneWidget);
+    expect(find.text('You save \$10.40 today.'), findsOneWidget);
+    expect(find.textContaining('Ends in '), findsWidgets);
+    expect(
+      find.widgetWithText(OutlinedButton, 'Shop event deals'),
+      findsOneWidget,
+    );
+    expect(find.text('Spring Launch deal'), findsWidgets);
     expect(find.byTooltip('Share product'), findsOneWidget);
+
+    final shopEventDealsButton = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Shop event deals'),
+    );
+    shopEventDealsButton.onPressed!.call();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Collection: Event deals'), findsOneWidget);
+    expect(productProvider.activeCollectionLabel, 'Event deals');
   });
 
   testWidgets('Initial product route lands on the detail screen', (
@@ -403,6 +539,9 @@ Widget _buildCatalogTestApp({
         final routeName = settings.name ?? '/';
         final routeUri = Uri.tryParse(routeName);
         final productKey = routeUri?.queryParameters['product'];
+        final collectionFilter = catalogCollectionFilterFromSlug(
+          routeUri?.queryParameters['collection'],
+        );
         if (productKey != null) {
           for (final product in productProvider.all) {
             if (product.matchesRouteKey(productKey)) {
@@ -415,7 +554,9 @@ Widget _buildCatalogTestApp({
         }
         return MaterialPageRoute<void>(
           settings: settings,
-          builder: (_) => home ?? const ProductCatalogScreen(),
+          builder: (_) =>
+              home ??
+              ProductCatalogScreen(initialCollectionFilter: collectionFilter),
         );
       },
     ),
@@ -481,6 +622,24 @@ class _FakeProductRepository implements ProductRepository {
         averageRating: 0,
         reviewCount: 0,
       ),
+    };
+  }
+}
+
+class _FakeProductRepositoryWithEvent extends _FakeProductRepository {
+  @override
+  Future<Map<String, dynamic>?> fetchActiveEvent() async {
+    final now = DateTime.now().toUtc();
+    return <String, dynamic>{
+      'id': 'event-1',
+      'title': 'Spring Launch',
+      'subtitle': 'Fresh picks for the week',
+      'badge': 'Featured Event',
+      'theme': 'default',
+      'is_active': true,
+      'starts_at': now.subtract(const Duration(hours: 2)).toIso8601String(),
+      'expires_at': now.add(const Duration(days: 1)).toIso8601String(),
+      'event_state': 'active',
     };
   }
 }

@@ -171,11 +171,33 @@ class AppSettingsProvider extends ChangeNotifier {
     if (cleanProductId.isEmpty) return 0;
 
     final cleanEventId = (eventId ?? _activeEventId ?? '').trim();
-    if (cleanEventId.isEmpty) return 0;
+    if (cleanEventId.isEmpty) {
+      return _latestDiscountForProduct(cleanProductId)?.discountPercent ?? 0;
+    }
 
     return _eventDiscountMap[_buildDiscountKey(cleanEventId, cleanProductId)]
             ?.discountPercent ??
         0;
+  }
+
+  EventProductDiscount? activeDiscountForProduct({
+    required String productId,
+    String? eventId,
+  }) {
+    final cleanProductId = productId.trim();
+    if (cleanProductId.isEmpty) return null;
+
+    final cleanEventId = (eventId ?? _activeEventId ?? '').trim();
+    if (cleanEventId.isEmpty) {
+      return _latestDiscountForProduct(cleanProductId);
+    }
+
+    final discount =
+        _eventDiscountMap[_buildDiscountKey(cleanEventId, cleanProductId)];
+    if (discount == null || discount.discountPercent <= 0) {
+      return null;
+    }
+    return discount;
   }
 
   List<EventProductDiscount> discountsForProduct(String productId) {
@@ -390,5 +412,25 @@ class AppSettingsProvider extends ChangeNotifier {
 
   static String _buildDiscountKey(String eventId, String productId) {
     return '${eventId.trim()}::${productId.trim()}';
+  }
+
+  EventProductDiscount? _latestDiscountForProduct(String productId) {
+    final cleanProductId = productId.trim();
+    if (cleanProductId.isEmpty) {
+      return null;
+    }
+    final matches =
+        _eventDiscountMap.values
+            .where(
+              (entry) =>
+                  entry.productId == cleanProductId &&
+                  entry.discountPercent > 0,
+            )
+            .toList()
+          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    if (matches.isEmpty) {
+      return null;
+    }
+    return matches.first;
   }
 }

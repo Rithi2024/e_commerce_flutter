@@ -8,6 +8,7 @@ import 'package:marketflow/core/widgets/favorite_icon_button.dart';
 import 'package:marketflow/config/routes/app_routes.dart';
 import 'package:marketflow/features/cart/presentation/bloc/shopping_cart_provider.dart';
 import 'package:marketflow/features/cart/presentation/pages/shopping_cart_screen.dart';
+import 'package:marketflow/features/catalog/presentation/widgets/event_deal_chip.dart';
 import 'package:marketflow/features/settings/presentation/bloc/app_settings_provider.dart';
 import 'package:marketflow/features/catalog/presentation/bloc/product_catalog_provider.dart';
 import 'package:marketflow/features/catalog/domain/entities/product_model.dart';
@@ -47,7 +48,15 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
       await Future.wait([productProvider.fetchProducts(), _loadActiveEvent()]);
       final initialCollection = widget.initialCollectionFilter;
       if (!mounted || initialCollection == null) return;
-      productProvider.showCollection(initialCollection);
+      if (initialCollection == CatalogCollectionFilter.eventDeals) {
+        final products = _activeEventDealProducts(
+          settings: context.read<AppSettingsProvider>(),
+          catalog: productProvider,
+        );
+        productProvider.showEventDeals(products.map((product) => product.id));
+      } else {
+        productProvider.showCollection(initialCollection);
+      }
     });
   }
 
@@ -184,10 +193,147 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
     _syncCatalogRoute();
   }
 
+  void _applySearchQuery(String value, {bool persist = true}) {
+    final normalized = value.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (_searchController.text != normalized) {
+      _searchController.value = TextEditingValue(
+        text: normalized,
+        selection: TextSelection.collapsed(offset: normalized.length),
+      );
+    }
+
+    final catalog = context.read<ProductCatalogProvider>();
+    if (persist) {
+      catalog.useSearchTerm(normalized);
+    } else {
+      catalog.setQuery(normalized);
+    }
+  }
+
+  List<Product> _activeEventDealProducts({
+    required AppSettingsProvider settings,
+    required ProductCatalogProvider catalog,
+  }) {
+    final activeEventId = (_activeEvent?['id'] ?? '').toString().trim();
+    if (activeEventId.isEmpty) {
+      return const <Product>[];
+    }
+
+    final discountsByProductId = _activeEventDealDiscountPercents(
+      settings: settings,
+    );
+    if (discountsByProductId.isEmpty) {
+      return const <Product>[];
+    }
+
+    final products =
+        catalog.all
+            .where((product) => discountsByProductId.containsKey(product.id))
+            .toList()
+          ..sort((a, b) {
+            final aDiscount = discountsByProductId[a.id] ?? 0;
+            final bDiscount = discountsByProductId[b.id] ?? 0;
+            final discountCompare = bDiscount.compareTo(aDiscount);
+            if (discountCompare != 0) {
+              return discountCompare;
+            }
+            final aSavings = a.price * (aDiscount / 100);
+            final bSavings = b.price * (bDiscount / 100);
+            final savingsCompare = bSavings.compareTo(aSavings);
+            if (savingsCompare != 0) {
+              return savingsCompare;
+            }
+            final aPopular = catalog.isBestSeller(a.id) ? 1 : 0;
+            final bPopular = catalog.isBestSeller(b.id) ? 1 : 0;
+            if (aPopular != bPopular) {
+              return bPopular.compareTo(aPopular);
+            }
+            final aCreated =
+                a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bCreated =
+                b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bCreated.compareTo(aCreated);
+          });
+    return products;
+  }
+
+  Map<String, double> _activeEventDealDiscountPercents({
+    required AppSettingsProvider settings,
+  }) {
+    final activeEventId = (_activeEvent?['id'] ?? '').toString().trim();
+    if (activeEventId.isEmpty) {
+      return const <String, double>{};
+    }
+
+    return <String, double>{
+      for (final entry in settings.eventDiscounts)
+        if (entry.eventId == activeEventId && entry.discountPercent > 0)
+          entry.productId.trim(): entry.discountPercent,
+    };
+  }
+
+  double _activeEventMaxDiscountPercent({
+    required AppSettingsProvider settings,
+  }) {
+    final activeEventId = (_activeEvent?['id'] ?? '').toString().trim();
+    if (activeEventId.isEmpty) {
+      return 0;
+    }
+
+    var maxDiscount = 0.0;
+    for (final discount in settings.eventDiscounts) {
+      if (discount.eventId != activeEventId) continue;
+      if (discount.discountPercent > maxDiscount) {
+        maxDiscount = discount.discountPercent;
+      }
+    }
+    return maxDiscount;
+  }
+
+  void _syncActiveEventDealsCollection() {
+    if (!mounted) return;
+    final settings = context.read<AppSettingsProvider>();
+    final catalog = context.read<ProductCatalogProvider>();
+    final products = _activeEventDealProducts(
+      settings: settings,
+      catalog: catalog,
+    );
+    catalog.setEventDealProductIds(
+      products.map((product) => product.id),
+      discountPercents: _activeEventDealDiscountPercents(settings: settings),
+    );
+  }
+
   Future<void> _showCollectionView(CatalogCollectionFilter filter) async {
     _searchController.clear();
-    context.read<ProductCatalogProvider>().showCollection(filter);
+    if (filter == CatalogCollectionFilter.eventDeals) {
+      final settings = context.read<AppSettingsProvider>();
+      final products = _activeEventDealProducts(
+        settings: settings,
+        catalog: context.read<ProductCatalogProvider>(),
+      );
+      context.read<ProductCatalogProvider>().showEventDeals(
+        products.map((product) => product.id),
+        discountPercents: _activeEventDealDiscountPercents(settings: settings),
+      );
+    } else {
+      context.read<ProductCatalogProvider>().showCollection(filter);
+    }
     _syncCatalogRoute(filter);
+    if (!_scrollController.hasClients) {
+      return;
+    }
+    await _scrollController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  Future<void> _browseAllProducts() async {
+    _searchController.clear();
+    context.read<ProductCatalogProvider>().clearAllFilters();
+    _syncCatalogRoute();
     if (!_scrollController.hasClients) {
       return;
     }
@@ -680,11 +826,15 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
       context.read<AppSettingsProvider>().setActiveEventId(
         isActive ? (nextEvent?['id'] ?? '').toString() : null,
       );
+      _syncActiveEventDealsCollection();
       _startEventTicker();
     } catch (_) {
       if (!mounted) return;
       _eventTicker?.cancel();
       context.read<AppSettingsProvider>().setActiveEventId(null);
+      context.read<ProductCatalogProvider>().setEventDealProductIds(
+        const <String>[],
+      );
       setState(() {
         _activeEvent = null;
         _remainingEvent = null;
@@ -750,6 +900,21 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
         .take(8)
         .toList();
     final showDiscoveryRails = isCompactMobile && !prov.hasActiveFilters;
+    final activeEventDeals = _activeEventDealProducts(
+      settings: settings,
+      catalog: prov,
+    );
+    final activeEventMaxDiscount = _activeEventMaxDiscountPercent(
+      settings: settings,
+    );
+    final activeEventTitle = (_activeEvent?['title'] ?? '').toString().trim();
+    final activeEventSubtitle = (_activeEvent?['subtitle'] ?? '')
+        .toString()
+        .trim();
+    final showEventDealsSummary =
+        prov.activeCollectionFilter == CatalogCollectionFilter.eventDeals &&
+        _activeEvent != null &&
+        activeEventDeals.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
@@ -841,6 +1006,7 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                         filteredCount: prov.filtered.length,
                         visibleCount: prov.visible.length,
                         searchController: _searchController,
+                        onApplySearchQuery: _applySearchQuery,
                         onClearAll: _clearSearchAndFilters,
                         onOpenFilters: () => _openFilterSheet(categories),
                       ),
@@ -872,11 +1038,39 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                                             ),
                                             event: _activeEvent!,
                                             remaining: _remainingEvent,
+                                            dealCount: activeEventDeals.length,
+                                            onBrowseDeals:
+                                                activeEventDeals.isEmpty
+                                                ? null
+                                                : () => _showCollectionView(
+                                                    CatalogCollectionFilter
+                                                        .eventDeals,
+                                                  ),
+                                          ),
+                                        ),
+                                      ),
+                                    if (showEventDealsSummary)
+                                      SliverToBoxAdapter(
+                                        child: Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            12,
+                                            0,
+                                            12,
+                                            8,
+                                          ),
+                                          child: _EventDealsSummaryCard(
+                                            event: _activeEvent!,
+                                            remaining: _remainingEvent,
+                                            dealCount: activeEventDeals.length,
+                                            maxDiscountPercent:
+                                                activeEventMaxDiscount,
+                                            onBrowseAll: _browseAllProducts,
                                           ),
                                         ),
                                       ),
                                     if (showDiscoveryRails &&
-                                        (recentlyViewed.isNotEmpty ||
+                                        (activeEventDeals.isNotEmpty ||
+                                            recentlyViewed.isNotEmpty ||
                                             bestSellerSpotlight.isNotEmpty ||
                                             newArrivalSpotlight.isNotEmpty ||
                                             budgetSpotlight.isNotEmpty))
@@ -890,19 +1084,50 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                                           ),
                                           child: Column(
                                             children: [
-                                              if (recentlyViewed.isNotEmpty)
+                                              if (activeEventDeals.isNotEmpty)
                                                 _CollectionStrip(
-                                                  title: 'Recently viewed',
+                                                  title:
+                                                      '${activeEventTitle.isEmpty ? 'Event' : activeEventTitle} picks',
                                                   subtitle:
-                                                      'Jump back into items you opened last.',
-                                                  products: recentlyViewed,
+                                                      activeEventSubtitle
+                                                          .isNotEmpty
+                                                      ? activeEventSubtitle
+                                                      : 'Limited-time discounts from the live event.',
+                                                  products: activeEventDeals,
+                                                  cardKeyPrefix:
+                                                      'event-deals',
                                                   onViewAll: () =>
                                                       _showCollectionView(
                                                         CatalogCollectionFilter
-                                                            .recentlyViewed,
+                                                            .eventDeals,
                                                       ),
                                                   onTapProduct:
                                                       _openProductDetails,
+                                                ),
+                                              if (recentlyViewed.isNotEmpty)
+                                                Padding(
+                                                  padding: EdgeInsets.only(
+                                                    top:
+                                                        activeEventDeals
+                                                            .isNotEmpty
+                                                        ? 14
+                                                        : 0,
+                                                  ),
+                                                  child: _CollectionStrip(
+                                                    title: 'Recently viewed',
+                                                    subtitle:
+                                                        'Jump back into items you opened last.',
+                                                    products: recentlyViewed,
+                                                    cardKeyPrefix:
+                                                        'recently-viewed',
+                                                    onViewAll: () =>
+                                                        _showCollectionView(
+                                                          CatalogCollectionFilter
+                                                              .recentlyViewed,
+                                                        ),
+                                                    onTapProduct:
+                                                        _openProductDetails,
+                                                  ),
                                                 ),
                                               if (bestSellerSpotlight
                                                   .isNotEmpty) ...[
@@ -913,6 +1138,8 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                                                   subtitle:
                                                       'The products shoppers keep picking first.',
                                                   products: bestSellerSpotlight,
+                                                  cardKeyPrefix:
+                                                      'best-sellers',
                                                   onViewAll: () =>
                                                       _showCollectionView(
                                                         CatalogCollectionFilter
@@ -933,6 +1160,8 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                                                   subtitle:
                                                       'Fresh drops that just landed in the catalog.',
                                                   products: newArrivalSpotlight,
+                                                  cardKeyPrefix:
+                                                      'new-arrivals',
                                                   onViewAll: () =>
                                                       _showCollectionView(
                                                         CatalogCollectionFilter
@@ -955,6 +1184,7 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                                                   subtitle:
                                                       'Budget-friendly picks with easy quick adds.',
                                                   products: budgetSpotlight,
+                                                  cardKeyPrefix: 'under-25',
                                                   onViewAll: () =>
                                                       _showCollectionView(
                                                         CatalogCollectionFilter
@@ -1521,10 +1751,19 @@ class _SortMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final catalog = context.watch<ProductCatalogProvider>();
+    final options = CatalogSortOption.values
+        .where(
+          (option) =>
+              option != CatalogSortOption.bestDeals ||
+              catalog.activeCollectionFilter ==
+                  CatalogCollectionFilter.eventDeals,
+        )
+        .toList();
     return PopupMenuButton<CatalogSortOption>(
       onSelected: (next) =>
           context.read<ProductCatalogProvider>().setSortOption(next),
-      itemBuilder: (context) => CatalogSortOption.values
+      itemBuilder: (context) => options
           .map(
             (option) => PopupMenuItem<CatalogSortOption>(
               value: option,
@@ -1616,6 +1855,7 @@ class _CatalogTopSection extends StatelessWidget {
   final int filteredCount;
   final int visibleCount;
   final TextEditingController searchController;
+  final ValueChanged<String> onApplySearchQuery;
   final VoidCallback onClearAll;
   final VoidCallback onOpenFilters;
 
@@ -1626,6 +1866,7 @@ class _CatalogTopSection extends StatelessWidget {
     required this.filteredCount,
     required this.visibleCount,
     required this.searchController,
+    required this.onApplySearchQuery,
     required this.onClearAll,
     required this.onOpenFilters,
   });
@@ -1639,6 +1880,10 @@ class _CatalogTopSection extends StatelessWidget {
     final subtitle = catalog.activeCollectionLabel != null
         ? '$filteredCount products in ${catalog.activeCollectionLabel!.toLowerCase()}'
         : 'Search, filter, and jump into details faster.';
+    final suggestionItems = catalog.searchSuggestions(limit: compact ? 4 : 6);
+    final showRecentSearches =
+        catalog.query.trim().isEmpty && catalog.recentSearches.isNotEmpty;
+    final showSearchDiscovery = suggestionItems.isNotEmpty;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
@@ -1724,6 +1969,7 @@ class _CatalogTopSection extends StatelessWidget {
             compact: compact,
             controller: searchController,
             showLabel: !isCompactCollapsed,
+            onSubmitted: (value) => onApplySearchQuery(value),
           ),
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 220),
@@ -1735,6 +1981,48 @@ class _CatalogTopSection extends StatelessWidget {
                     key: const ValueKey<String>('catalog-controls-expanded'),
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _FilterCountPill(
+                            label: 'Matches',
+                            value: filteredCount,
+                          ),
+                          _FilterCountPill(
+                            label: 'Active',
+                            value: catalog.activeFilterCount,
+                          ),
+                          _FilterCountPill(
+                            label: 'Saved searches',
+                            value: catalog.recentSearches.length,
+                          ),
+                        ],
+                      ),
+                      if (showSearchDiscovery) ...[
+                        const SizedBox(height: 12),
+                        _SearchDiscoverySection(
+                          compact: compact,
+                          recent: showRecentSearches,
+                          items: suggestionItems,
+                          onApplyQuery: onApplySearchQuery,
+                          onRemoveQuery: showRecentSearches
+                              ? (value) => unawaited(
+                                  context
+                                      .read<ProductCatalogProvider>()
+                                      .removeRecentSearch(value),
+                                )
+                              : null,
+                          onClearAll: showRecentSearches
+                              ? () => unawaited(
+                                  context
+                                      .read<ProductCatalogProvider>()
+                                      .clearRecentSearches(),
+                                )
+                              : null,
+                        ),
+                      ],
                       const SizedBox(height: 10),
                       if (compact)
                         Column(
@@ -1847,11 +2135,13 @@ class _SearchBar extends StatelessWidget {
   final bool compact;
   final TextEditingController? controller;
   final bool showLabel;
+  final ValueChanged<String>? onSubmitted;
 
   const _SearchBar({
     this.compact = false,
     this.controller,
     this.showLabel = true,
+    this.onSubmitted,
   });
 
   @override
@@ -1874,6 +2164,7 @@ class _SearchBar extends StatelessWidget {
         TextField(
           controller: controller,
           onChanged: (v) => context.read<ProductCatalogProvider>().setQuery(v),
+          onSubmitted: onSubmitted,
           textInputAction: TextInputAction.search,
           decoration: InputDecoration(
             hintText: compact
@@ -1915,6 +2206,88 @@ class _SearchBar extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SearchDiscoverySection extends StatelessWidget {
+  final bool compact;
+  final bool recent;
+  final List<String> items;
+  final ValueChanged<String> onApplyQuery;
+  final ValueChanged<String>? onRemoveQuery;
+  final VoidCallback? onClearAll;
+
+  const _SearchDiscoverySection({
+    required this.compact,
+    required this.recent,
+    required this.items,
+    required this.onApplyQuery,
+    this.onRemoveQuery,
+    this.onClearAll,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final title = recent ? 'Recent searches' : 'Suggested matches';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF5D6E67),
+                ),
+              ),
+            ),
+            if (recent && onClearAll != null)
+              TextButton(
+                onPressed: onClearAll,
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('Clear'),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: items.map((item) {
+            final icon = recent ? Icons.history_rounded : Icons.travel_explore;
+            if (recent) {
+              return InputChip(
+                avatar: Icon(icon, size: compact ? 16 : 18),
+                label: Text(item),
+                onPressed: () => onApplyQuery(item),
+                onDeleted: onRemoveQuery == null
+                    ? null
+                    : () => onRemoveQuery!(item),
+                deleteIcon: const Icon(Icons.close_rounded, size: 16),
+                backgroundColor: const Color(0xFFFFFFFF),
+                side: const BorderSide(color: Color(0xFFD8E6DF)),
+                visualDensity: VisualDensity.compact,
+              );
+            }
+            return ActionChip(
+              avatar: Icon(icon, size: compact ? 16 : 18),
+              label: Text(item),
+              onPressed: () => onApplyQuery(item),
+              backgroundColor: const Color(0xFFFFFFFF),
+              side: const BorderSide(color: Color(0xFFD8E6DF)),
+              visualDensity: VisualDensity.compact,
+            );
+          }).toList(),
         ),
       ],
     );
@@ -2042,8 +2415,16 @@ class _EmptyCatalogState extends StatelessWidget {
 class _HeroBanner extends StatelessWidget {
   final Map<String, dynamic> event;
   final Duration? remaining;
+  final int dealCount;
+  final VoidCallback? onBrowseDeals;
 
-  const _HeroBanner({super.key, required this.event, required this.remaining});
+  const _HeroBanner({
+    super.key,
+    required this.event,
+    required this.remaining,
+    required this.dealCount,
+    required this.onBrowseDeals,
+  });
 
   String _formatRemaining(Duration value) {
     final total = value.inSeconds;
@@ -2210,6 +2591,27 @@ class _HeroBanner extends StatelessWidget {
                       ),
                     ),
                   ],
+                  if (dealCount > 0) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0x24FFFFFF),
+                        borderRadius: BorderRadius.circular(100),
+                      ),
+                      child: Text(
+                        '$dealCount event ${dealCount == 1 ? 'deal' : 'deals'} live',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
                   SizedBox(height: 6),
                   Text(
                     title.isEmpty ? 'Featured Event' : headline,
@@ -2220,12 +2622,207 @@ class _HeroBanner extends StatelessWidget {
                       fontWeight: FontWeight.w800,
                     ),
                   ),
+                  if (onBrowseDeals != null) ...[
+                    const SizedBox(height: 12),
+                    FilledButton.tonalIcon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0x20FFFFFF),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                      ),
+                      onPressed: onBrowseDeals,
+                      icon: const Icon(Icons.local_offer_outlined, size: 18),
+                      label: const Text('Shop event'),
+                    ),
+                  ],
                 ],
               ),
             ),
             Icon(_themeIcon(theme), color: Colors.white, size: 42),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _EventDealsSummaryCard extends StatelessWidget {
+  final Map<String, dynamic> event;
+  final Duration? remaining;
+  final int dealCount;
+  final double maxDiscountPercent;
+  final Future<void> Function() onBrowseAll;
+
+  const _EventDealsSummaryCard({
+    required this.event,
+    required this.remaining,
+    required this.dealCount,
+    required this.maxDiscountPercent,
+    required this.onBrowseAll,
+  });
+
+  String _formatRemaining(Duration value) {
+    final totalHours = value.inHours;
+    final minutes = value.inMinutes.remainder(60);
+    if (totalHours >= 24) {
+      final days = value.inDays;
+      final hours = totalHours.remainder(24);
+      return '${days}d ${hours}h';
+    }
+    if (totalHours > 0) {
+      return '${totalHours}h ${minutes}m';
+    }
+    return '${value.inMinutes}m left';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final eventState = (event['event_state'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final isUpcoming = eventState == 'upcoming';
+    final title = (event['title'] ?? 'Event deals').toString().trim();
+    final subtitle = (event['subtitle'] ?? '').toString().trim();
+    final badge = (event['badge'] ?? '').toString().trim();
+    final timingLabel = remaining == null
+        ? null
+        : isUpcoming
+        ? 'Starts in ${_formatRemaining(remaining!)}'
+        : 'Ends in ${_formatRemaining(remaining!)}';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFD8E6DF)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0F16342B),
+            blurRadius: 14,
+            offset: Offset(0, 7),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF5F0),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  badge.isEmpty ? 'Featured Event' : badge,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF1C4A40),
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF2F6F4),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$dealCount live ${dealCount == 1 ? 'deal' : 'deals'} in this event',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF173D36),
+                  ),
+                ),
+              ),
+              if (maxDiscountPercent > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF7EEE8),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    'Save up to ${maxDiscountPercent.toStringAsFixed(0)}%',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF8A4B17),
+                    ),
+                  ),
+                ),
+              if (timingLabel != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FBF9),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: const Color(0xFFDCE9E3)),
+                  ),
+                  child: Text(
+                    timingLabel,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF5D6F68),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            title.isEmpty ? 'Event deals' : '$title event',
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF173D36),
+            ),
+          ),
+          if (subtitle.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                fontSize: 13,
+                height: 1.4,
+                color: Color(0xFF64726D),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: onBrowseAll,
+              icon: const Icon(Icons.grid_view_rounded, size: 18),
+              label: const Text('Browse all products'),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2292,6 +2889,7 @@ class _CollectionStrip extends StatelessWidget {
   final String title;
   final String subtitle;
   final List<Product> products;
+  final String cardKeyPrefix;
   final VoidCallback onViewAll;
   final ValueChanged<Product> onTapProduct;
 
@@ -2299,6 +2897,7 @@ class _CollectionStrip extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.products,
+    required this.cardKeyPrefix,
     required this.onViewAll,
     required this.onTapProduct,
   });
@@ -2359,6 +2958,7 @@ class _CollectionStrip extends StatelessWidget {
             itemBuilder: (context, index) {
               final product = products[index];
               return _CollectionProductCard(
+                cardKeyPrefix: cardKeyPrefix,
                 product: product,
                 onTap: () => onTapProduct(product),
               );
@@ -2371,16 +2971,24 @@ class _CollectionStrip extends StatelessWidget {
 }
 
 class _CollectionProductCard extends StatelessWidget {
+  final String cardKeyPrefix;
   final Product product;
   final VoidCallback onTap;
 
-  const _CollectionProductCard({required this.product, required this.onTap});
+  const _CollectionProductCard({
+    required this.cardKeyPrefix,
+    required this.product,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<AppSettingsProvider>();
     final catalog = context.watch<ProductCatalogProvider>();
     final discount = settings.discountPercentForProduct(productId: product.id);
+    final eventDiscount = settings.activeDiscountForProduct(
+      productId: product.id,
+    );
     final hasDiscount = discount > 0;
     final isPopular = catalog.isBestSeller(product.id);
     final isNewArrival = catalog.isNewArrival(product);
@@ -2404,6 +3012,9 @@ class _CollectionProductCard extends StatelessWidget {
     ];
 
     return InkWell(
+      key: ValueKey<String>(
+        'collection-product-card-$cardKeyPrefix-${product.id}',
+      ),
       onTap: onTap,
       borderRadius: BorderRadius.circular(18),
       child: Ink(
@@ -2483,15 +3094,17 @@ class _CollectionProductCard extends StatelessWidget {
                   child: hasDiscount
                       ? _ProductBadge(
                           label: '-${discount.toStringAsFixed(0)}%',
-                          background: const Color(0xFFCC5A2E),
-                          foreground: Colors.white,
+                          background: const Color(0xFFFCE4DA),
+                          foreground: const Color(0xFF9B3E1D),
+                          borderColor: const Color(0xFFF3BEA8),
                         )
                       : isPopular
                       ? const _ProductBadge(
                           label: 'Popular',
-                          background: Color(0xFF163E36),
-                          foreground: Colors.white,
-                          icon: Icons.local_fire_department_rounded,
+                          background: Color(0xFFFFF3D9),
+                          foreground: Color(0xFF8C5C12),
+                          borderColor: Color(0xFFF2D79E),
+                          icon: Icons.trending_up_rounded,
                         )
                       : const _ProductBadge(
                           label: 'New',
@@ -2535,6 +3148,20 @@ class _CollectionProductCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 6),
+                    if (eventDiscount != null) ...[
+                      EventDealChip(
+                        eventTitle: eventDiscount.eventTitle,
+                        backgroundColor: Colors.white.withValues(alpha: 0.16),
+                        foregroundColor: Colors.white,
+                        borderColor: Colors.white.withValues(alpha: 0.22),
+                        fontSize: 10.5,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 5,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     if (ratingSummary != null && ratingSummary.hasRatings)
                       Wrap(
                         spacing: 4,
@@ -2661,6 +3288,9 @@ class _ProductCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final settings = context.watch<AppSettingsProvider>();
     final discount = settings.discountPercentForProduct(productId: product.id);
+    final eventDiscount = settings.activeDiscountForProduct(
+      productId: product.id,
+    );
     final hasDiscount = discount > 0;
     final category = (product.category ?? '').trim();
     final isOutOfStock = stockSummary?.isOutOfStock == true;
@@ -2683,6 +3313,7 @@ class _ProductCard extends StatelessWidget {
     ];
 
     return InkWell(
+      key: ValueKey<String>('catalog-product-card-${product.id}'),
       borderRadius: BorderRadius.circular(compact ? 20 : 18),
       onTap: onTap,
       child: Ink(
@@ -2787,8 +3418,9 @@ class _ProductCard extends StatelessWidget {
                                 if (hasDiscount)
                                   _ProductBadge(
                                     label: '-${discount.toStringAsFixed(0)}%',
-                                    background: const Color(0xFFCC5A2E),
-                                    foreground: Colors.white,
+                                    background: const Color(0xFFFCE4DA),
+                                    foreground: const Color(0xFF9B3E1D),
+                                    borderColor: const Color(0xFFF3BEA8),
                                   ),
                                 if (isOutOfStock)
                                   const _ProductBadge(
@@ -2811,9 +3443,10 @@ class _ProductCard extends StatelessWidget {
                                 if (isPopular)
                                   const _ProductBadge(
                                     label: 'Popular',
-                                    background: Color(0xFF163E36),
-                                    foreground: Colors.white,
-                                    icon: Icons.local_fire_department_rounded,
+                                    background: Color(0xFFFFF3D9),
+                                    foreground: Color(0xFF8C5C12),
+                                    borderColor: Color(0xFFF2D79E),
+                                    icon: Icons.trending_up_rounded,
                                   ),
                               ],
                             ),
@@ -2821,13 +3454,16 @@ class _ProductCard extends StatelessWidget {
                           const SizedBox(width: 6),
                           Container(
                             decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.92),
+                              color: Colors.white.withValues(alpha: 0.88),
                               borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.34),
+                              ),
                               boxShadow: const [
                                 BoxShadow(
                                   color: Color(0x14000000),
-                                  blurRadius: 8,
-                                  offset: Offset(0, 4),
+                                  blurRadius: 7,
+                                  offset: Offset(0, 3),
                                 ),
                               ],
                             ),
@@ -2836,7 +3472,14 @@ class _ProductCard extends StatelessWidget {
                               onPressed: isWishlistBusy
                                   ? null
                                   : onToggleFavorite,
-                              size: 19,
+                              size: 17,
+                              padding: const EdgeInsets.all(5),
+                              constraints: const BoxConstraints.tightFor(
+                                width: 30,
+                                height: 30,
+                              ),
+                              splashRadius: 16,
+                              visualDensity: VisualDensity.compact,
                               tooltip: isFavorite
                                   ? 'Remove from favorites'
                                   : 'Save to favorites',
@@ -2881,6 +3524,22 @@ class _ProductCard extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 6),
+                          if (eventDiscount != null) ...[
+                            EventDealChip(
+                              eventTitle: eventDiscount.eventTitle,
+                              backgroundColor: Colors.white.withValues(
+                                alpha: 0.16,
+                              ),
+                              foregroundColor: Colors.white,
+                              borderColor: Colors.white.withValues(alpha: 0.22),
+                              fontSize: 10.5,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 5,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
                           Row(
                             children: [
                               if (ratingLoading)
@@ -3064,12 +3723,14 @@ class _ProductBadge extends StatelessWidget {
   final Color background;
   final Color foreground;
   final IconData? icon;
+  final Color? borderColor;
 
   const _ProductBadge({
     required this.label,
     required this.background,
     required this.foreground,
     this.icon,
+    this.borderColor,
   });
 
   @override
@@ -3079,6 +3740,7 @@ class _ProductBadge extends StatelessWidget {
       decoration: BoxDecoration(
         color: background,
         borderRadius: BorderRadius.circular(999),
+        border: borderColor == null ? null : Border.all(color: borderColor!),
         boxShadow: const [
           BoxShadow(
             color: Color(0x1A000000),

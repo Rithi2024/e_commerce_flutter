@@ -37,6 +37,7 @@ import 'package:marketflow/features/catalog/presentation/pages/product_details_s
 import 'package:marketflow/features/cart/presentation/bloc/shopping_cart_provider.dart';
 import 'package:marketflow/features/wishlist/presentation/bloc/user_wishlist_provider.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -152,6 +153,9 @@ class EcommerceApp extends StatelessWidget {
         theme: AppTheme.light(),
         scrollBehavior: const AppScrollBehavior(),
         debugShowCheckedModeBanner: false,
+        builder: (context, child) => _WebSessionActivityBoundary(
+          child: child ?? const SizedBox.shrink(),
+        ),
         onGenerateRoute: (settings) {
           final requestedPath = settings.name ?? AppRoutes.home;
           return MaterialPageRoute<void>(
@@ -160,6 +164,113 @@ class EcommerceApp extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+class _WebSessionActivityBoundary extends StatefulWidget {
+  const _WebSessionActivityBoundary({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_WebSessionActivityBoundary> createState() =>
+      _WebSessionActivityBoundaryState();
+}
+
+class _WebSessionActivityBoundaryState
+    extends State<_WebSessionActivityBoundary>
+    with WidgetsBindingObserver {
+  late final bool _tracksWebSessionActivity;
+
+  @override
+  void initState() {
+    super.initState();
+    _tracksWebSessionActivity = context
+        .read<AuthenticationProvider>()
+        .tracksWebSessionActivity;
+    if (!_tracksWebSessionActivity) {
+      return;
+    }
+    WidgetsBinding.instance.addObserver(this);
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      context.read<AuthenticationProvider>().recordWebSessionActivity(
+        force: true,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    if (_tracksWebSessionActivity) {
+      HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+      WidgetsBinding.instance.removeObserver(this);
+    }
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_tracksWebSessionActivity) {
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      context.read<AuthenticationProvider>().recordWebSessionActivity(
+        force: true,
+      );
+    }
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    if (!mounted) {
+      return false;
+    }
+    context.read<AuthenticationProvider>().recordWebSessionActivity(
+      force: true,
+    );
+    return false;
+  }
+
+  void _showPendingNotice(AuthenticationProvider auth) {
+    final notice = auth.takePendingWebSessionNotice();
+    if (notice == null || notice.trim().isEmpty) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      if (messenger == null) {
+        return;
+      }
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(notice)));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AuthenticationProvider>(
+      builder: (context, auth, _) {
+        _showPendingNotice(auth);
+        if (!auth.tracksWebSessionActivity) {
+          return widget.child;
+        }
+        return Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (_) => auth.recordWebSessionActivity(force: true),
+          onPointerMove: (_) => auth.recordWebSessionActivity(),
+          onPointerHover: (_) => auth.recordWebSessionActivity(),
+          onPointerSignal: (_) => auth.recordWebSessionActivity(force: true),
+          child: widget.child,
+        );
+      },
     );
   }
 }

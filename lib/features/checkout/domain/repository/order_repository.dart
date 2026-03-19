@@ -12,6 +12,15 @@ abstract class OrderRepository {
     required String promoCode,
   });
 
+  Future<void> sendOrderConfirmationEmail({
+    required String email,
+    required String userName,
+    required int orderId,
+    required double total,
+    required String status,
+    required List<CartItem> items,
+  });
+
   Future<List<Map<String, dynamic>>> loadOrders();
 
   Future<CheckoutPrefill> loadCheckoutPrefill();

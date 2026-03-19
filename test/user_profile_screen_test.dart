@@ -32,6 +32,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Profile'), findsOneWidget);
+    expect(find.text('Account Snapshot'), findsOneWidget);
+    expect(find.text('Profile completion'), findsOneWidget);
     expect(find.text('Saved Address'), findsOneWidget);
     expect(find.text('Security'), findsOneWidget);
     expect(find.text('Notifications'), findsOneWidget);
@@ -426,6 +428,16 @@ class _FakeOrderRepository implements OrderRepository {
   final List<Map<String, dynamic>> orders;
 
   _FakeOrderRepository({this.orders = const <Map<String, dynamic>>[]});
+
+  @override
+  Future<void> sendOrderConfirmationEmail({
+    required String email,
+    required String userName,
+    required int orderId,
+    required double total,
+    required String status,
+    required List<CartItem> items,
+  }) async {}
 
   @override
   Future<int> placeOrder({

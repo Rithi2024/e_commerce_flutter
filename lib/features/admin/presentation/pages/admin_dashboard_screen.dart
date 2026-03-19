@@ -673,6 +673,91 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
   }
 
+  String _eventThemeLabel(String value) {
+    for (final option in _eventThemes) {
+      if (option.value == value) return option.label;
+    }
+    return 'Default';
+  }
+
+  String _eventPreviewStatus({
+    required bool isActive,
+    required DateTime startsAtLocal,
+    required DateTime expiresAtLocal,
+  }) {
+    final now = DateTime.now();
+    if (!expiresAtLocal.isAfter(now)) return 'expired';
+    if (!isActive) return 'inactive';
+    if (startsAtLocal.isAfter(now)) return 'upcoming';
+    return 'active';
+  }
+
+  String _eventPreviewStatusLabel(String value) {
+    switch (value) {
+      case 'expired':
+        return 'Expired';
+      case 'inactive':
+        return 'Inactive';
+      case 'upcoming':
+        return 'Upcoming';
+      default:
+        return 'Active';
+    }
+  }
+
+  Color _eventPreviewStatusBackground(String value) {
+    switch (value) {
+      case 'active':
+        return const Color(0xFFE8F5F2);
+      case 'upcoming':
+        return const Color(0xFFEAF2FF);
+      case 'expired':
+        return const Color(0xFFFFECEC);
+      default:
+        return const Color(0xFFF2F3F5);
+    }
+  }
+
+  Color _eventPreviewStatusForeground(String value) {
+    switch (value) {
+      case 'active':
+        return const Color(0xFF0B7D69);
+      case 'upcoming':
+        return const Color(0xFF2F5EA8);
+      case 'expired':
+        return const Color(0xFFB33030);
+      default:
+        return const Color(0xFF49525A);
+    }
+  }
+
+  String _eventPreviewSummary({
+    required bool isActive,
+    required DateTime startsAtLocal,
+    required DateTime expiresAtLocal,
+  }) {
+    final now = DateTime.now();
+    final status = _eventPreviewStatus(
+      isActive: isActive,
+      startsAtLocal: startsAtLocal,
+      expiresAtLocal: expiresAtLocal,
+    );
+    if (status == 'active') {
+      final remaining = expiresAtLocal.difference(now);
+      return remaining.inSeconds > 0
+          ? 'Ends in ${_formatCountdown(remaining)}'
+          : 'Live now';
+    }
+    if (status == 'upcoming') {
+      final startsIn = startsAtLocal.difference(now);
+      return startsIn.inSeconds > 0
+          ? 'Starts in ${_formatCountdown(startsIn)}'
+          : 'Scheduled';
+    }
+    if (status == 'expired') return 'This event window has already passed.';
+    return 'Saved as a draft until you set it active.';
+  }
+
   DateTime? _orderDateLocal(AdminOrder order) {
     return order.createdAt?.toLocal();
   }
@@ -1387,17 +1472,37 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
   }
 
-  Future<void> _openEventEditor({AdminEvent? event}) async {
+  Future<void> _openEventEditor({
+    AdminEvent? event,
+    bool duplicate = false,
+  }) async {
     final formKey = GlobalKey<FormState>();
-    final title = TextEditingController(text: event?.title ?? '');
+    final isDuplicate = duplicate && event != null;
+    final duplicateSource = isDuplicate ? event : null;
+    final duplicateStartLocal = DateTime.now().add(const Duration(minutes: 10));
+    final duplicateDuration =
+        duplicateSource?.startsAt != null &&
+            duplicateSource?.expiresAt != null &&
+            duplicateSource!.expiresAt!.isAfter(duplicateSource.startsAt!)
+        ? duplicateSource.expiresAt!.difference(duplicateSource.startsAt!)
+        : const Duration(hours: 24);
+
+    final title = TextEditingController(
+      text: isDuplicate
+          ? '${event.title.isEmpty ? 'Untitled Event' : event.title} Copy'
+          : event?.title ?? '',
+    );
     final subtitle = TextEditingController(text: event?.subtitle ?? '');
     final badge = TextEditingController(text: event?.badge ?? '');
     final nowLocal = DateTime.now();
-    var startsAtLocal =
-        event?.startsAt?.toLocal() ?? nowLocal.add(const Duration(minutes: 10));
-    var expiresAtLocal =
-        event?.expiresAt?.toLocal() ??
-        startsAtLocal.add(const Duration(hours: 24));
+    var startsAtLocal = isDuplicate
+        ? duplicateStartLocal
+        : event?.startsAt?.toLocal() ??
+              nowLocal.add(const Duration(minutes: 10));
+    var expiresAtLocal = isDuplicate
+        ? duplicateStartLocal.add(duplicateDuration)
+        : event?.expiresAt?.toLocal() ??
+              startsAtLocal.add(const Duration(hours: 24));
     if (!expiresAtLocal.isAfter(startsAtLocal)) {
       expiresAtLocal = startsAtLocal.add(const Duration(hours: 1));
     }
@@ -1405,7 +1510,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (!_eventThemes.any((option) => option.value == theme)) {
       theme = 'default';
     }
-    bool isActive = event?.isActive ?? false;
+    bool isActive = isDuplicate ? false : event?.isActive ?? false;
     String dateTimeError = '';
 
     try {
@@ -1415,7 +1520,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           return StatefulBuilder(
             builder: (context, setDialogState) {
               return AlertDialog(
-                title: Text(event == null ? 'Add Event' : 'Edit Event'),
+                title: Text(
+                  isDuplicate
+                      ? 'Duplicate Event'
+                      : (event == null ? 'Add Event' : 'Edit Event'),
+                ),
                 content: SingleChildScrollView(
                   child: Form(
                     key: formKey,
@@ -1425,6 +1534,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         TextFormField(
                           controller: title,
                           decoration: const InputDecoration(labelText: 'Title'),
+                          onChanged: (_) => setDialogState(() {}),
                           validator: (value) {
                             if ((value ?? '').trim().isEmpty) {
                               return 'Title required';
@@ -1436,6 +1546,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         TextFormField(
                           controller: subtitle,
                           maxLines: 2,
+                          onChanged: (_) => setDialogState(() {}),
                           decoration: const InputDecoration(
                             labelText: 'Subtitle',
                             hintText: 'Shown on second line',
@@ -1444,6 +1555,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         const SizedBox(height: 10),
                         TextFormField(
                           controller: badge,
+                          onChanged: (_) => setDialogState(() {}),
                           decoration: const InputDecoration(
                             labelText: 'Badge',
                             hintText: 'Example: New Drop',
@@ -1520,6 +1632,53 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                             child: const Text('Select'),
                           ),
                         ),
+                        const SizedBox(height: 4),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Quick end time',
+                            style: TextStyle(
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children:
+                              <MapEntry<String, Duration>>[
+                                const MapEntry<String, Duration>(
+                                  '6h',
+                                  Duration(hours: 6),
+                                ),
+                                const MapEntry<String, Duration>(
+                                  '24h',
+                                  Duration(hours: 24),
+                                ),
+                                const MapEntry<String, Duration>(
+                                  '3d',
+                                  Duration(days: 3),
+                                ),
+                                const MapEntry<String, Duration>(
+                                  '7d',
+                                  Duration(days: 7),
+                                ),
+                              ].map((option) {
+                                return ActionChip(
+                                  label: Text('+${option.key}'),
+                                  onPressed: () {
+                                    setDialogState(() {
+                                      expiresAtLocal = startsAtLocal.add(
+                                        option.value,
+                                      );
+                                      dateTimeError = '';
+                                    });
+                                  },
+                                );
+                              }).toList(),
+                        ),
                         if (dateTimeError.isNotEmpty) ...[
                           const SizedBox(height: 4),
                           Align(
@@ -1541,6 +1700,168 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                             setDialogState(() => isActive = value);
                           },
                           title: const Text('Set as active event'),
+                        ),
+                        const SizedBox(height: 6),
+                        Builder(
+                          builder: (context) {
+                            final previewStatus = _eventPreviewStatus(
+                              isActive: isActive,
+                              startsAtLocal: startsAtLocal,
+                              expiresAtLocal: expiresAtLocal,
+                            );
+                            final previewTitle = title.text.trim().isEmpty
+                                ? 'Untitled Event'
+                                : title.text.trim();
+                            final previewSubtitle = subtitle.text.trim();
+                            final previewBadge = badge.text.trim();
+                            return Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF7F8FA),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFD8E4DD),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.visibility_outlined,
+                                        size: 18,
+                                        color: Color(0xFF35544A),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Expanded(
+                                        child: Text(
+                                          'Event preview',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: _eventPreviewStatusBackground(
+                                            previewStatus,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            999,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          _eventPreviewStatusLabel(
+                                            previewStatus,
+                                          ),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color:
+                                                _eventPreviewStatusForeground(
+                                                  previewStatus,
+                                                ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFEAF2FF),
+                                          borderRadius: BorderRadius.circular(
+                                            999,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          _eventThemeLabel(theme),
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF2F5EA8),
+                                          ),
+                                        ),
+                                      ),
+                                      if (previewBadge.isNotEmpty)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFF4EFE2),
+                                            borderRadius: BorderRadius.circular(
+                                              999,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            previewBadge,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                              color: Color(0xFF7B5E14),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    previewTitle,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  if (previewSubtitle.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      previewSubtitle,
+                                      style: const TextStyle(
+                                        color: Color(0xFF44524D),
+                                        height: 1.35,
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    '${_formatDateTimeShort(startsAtLocal)} -> ${_formatDateTimeShort(expiresAtLocal)}',
+                                    style: const TextStyle(
+                                      color: Color(0xFF576560),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    _eventPreviewSummary(
+                                      isActive: isActive,
+                                      startsAtLocal: startsAtLocal,
+                                      expiresAtLocal: expiresAtLocal,
+                                    ),
+                                    style: const TextStyle(
+                                      color: Color(0xFF35544A),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
                         ),
                       ],
                     ),
@@ -1576,7 +1897,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
       final admin = context.read<AdminDashboardProvider>();
       final result = await admin.saveEvent(
-        eventId: event?.id,
+        eventId: isDuplicate ? null : event?.id,
         title: title.text.trim(),
         subtitle: subtitle.text.trim(),
         badge: badge.text.trim(),
@@ -1587,9 +1908,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       );
       if (!mounted) return;
       if (result.isSuccess) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Event saved')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isDuplicate ? 'Event duplicated' : 'Event saved'),
+          ),
+        );
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1640,6 +1963,73 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Delete failed: ${result.requireFailure.message}'),
+      ),
+    );
+  }
+
+  Future<void> _toggleEventActive(AdminEvent event, bool nextActive) async {
+    final startsAt = event.startsAt;
+    final expiresAt = event.expiresAt;
+    if (startsAt == null || expiresAt == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This event is missing schedule data and cannot be updated quickly.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final actionLabel = nextActive ? 'activate' : 'pause';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(nextActive ? 'Activate Event' : 'Pause Event'),
+        content: Text(
+          'Do you want to $actionLabel "${event.title.isEmpty ? 'Untitled Event' : event.title}"?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(nextActive ? 'Activate' : 'Pause'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final admin = context.read<AdminDashboardProvider>();
+    final result = await admin.saveEvent(
+      eventId: event.id,
+      title: event.title,
+      subtitle: event.subtitle,
+      badge: event.badge,
+      theme: event.theme,
+      isActive: nextActive,
+      startsAtIsoUtc: startsAt.toUtc().toIso8601String(),
+      expiresAtIsoUtc: expiresAt.toUtc().toIso8601String(),
+    );
+    if (!mounted) return;
+
+    if (result.isSuccess) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(nextActive ? 'Event activated' : 'Event paused'),
+        ),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${nextActive ? 'Activation' : 'Pause'} failed: ${result.requireFailure.message}',
+        ),
       ),
     );
   }
@@ -3187,7 +3577,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             formatCountdown: _formatCountdown,
             onTapEvent: _showEventItems,
             onEditEvent: (event) => _openEventEditor(event: event),
+            onDuplicateEvent: (event) =>
+                _openEventEditor(event: event, duplicate: true),
             onDeleteEvent: _deleteEvent,
+            onToggleActive: _toggleEventActive,
           ),
         ),
       );

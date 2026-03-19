@@ -351,6 +351,60 @@ void main() {
     expect(provider.filtered.first.id, 'best-seller');
   });
 
+  test('event deals default to best deals sorting', () async {
+    final provider = ProductCatalogProvider(
+      useCases: ProductUseCases(
+        _FakeProductRepository(
+          products: <Product>[
+            Product(
+              id: 'high-discount',
+              name: 'Big Event Save',
+              price: 40,
+              imageUrl: '',
+              description: '',
+              category: 'Shoes',
+              createdAt: DateTime(2026, 3, 3),
+            ),
+            Product(
+              id: 'low-discount',
+              name: 'Small Event Save',
+              price: 80,
+              imageUrl: '',
+              description: '',
+              category: 'Shoes',
+              createdAt: DateTime(2026, 3, 4),
+            ),
+            Product(
+              id: 'regular',
+              name: 'Regular Price',
+              price: 20,
+              imageUrl: '',
+              description: '',
+              category: 'Shoes',
+              createdAt: DateTime(2026, 3, 5),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await provider.fetchProducts();
+    provider.showEventDeals(
+      const <String>['high-discount', 'low-discount'],
+      discountPercents: const <String, double>{
+        'high-discount': 35,
+        'low-discount': 10,
+      },
+    );
+
+    expect(provider.sortOption, CatalogSortOption.bestDeals);
+    expect(provider.activeCollectionLabel, 'Event deals');
+    expect(provider.filtered.map((product) => product.id), <String>[
+      'high-discount',
+      'low-discount',
+    ]);
+  });
+
   test('top rated sort prioritizes highest rated products', () async {
     final provider = ProductCatalogProvider(
       useCases: ProductUseCases(
@@ -583,4 +637,66 @@ void main() {
       ]);
     },
   );
+
+  test('search history persists newest unique terms first', () async {
+    final provider = ProductCatalogProvider(
+      useCases: ProductUseCases(
+        _FakeProductRepository(products: _buildProducts(4)),
+      ),
+    );
+
+    await provider.fetchProducts();
+    provider.useSearchTerm('Daily Runner');
+    provider.useSearchTerm('Shoes');
+    provider.useSearchTerm('Daily Runner');
+
+    expect(provider.recentSearches, <String>['Daily Runner', 'Shoes']);
+
+    final restored = ProductCatalogProvider(
+      useCases: ProductUseCases(
+        _FakeProductRepository(products: _buildProducts(4)),
+      ),
+    );
+    await restored.fetchProducts();
+
+    expect(restored.recentSearches, <String>['Daily Runner', 'Shoes']);
+  });
+
+  test('search suggestions prefer matching recent searches and catalog data', () async {
+    final provider = ProductCatalogProvider(
+      useCases: ProductUseCases(
+        _FakeProductRepository(
+          products: <Product>[
+            Product(
+              id: 'runner',
+              name: 'Daily Runner',
+              price: 42,
+              imageUrl: '',
+              description: '',
+              category: 'Shoes',
+              createdAt: DateTime(2026, 3, 12),
+            ),
+            Product(
+              id: 'street',
+              name: 'Street Jacket',
+              price: 58,
+              imageUrl: '',
+              description: '',
+              category: 'Outerwear',
+              createdAt: DateTime(2026, 3, 13),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    await provider.fetchProducts();
+    provider.useSearchTerm('Runner');
+
+    expect(provider.searchSuggestions(seed: 'ru'), <String>[
+      'Runner',
+      'Daily Runner',
+    ]);
+    expect(provider.searchSuggestions(seed: 'sho'), contains('Shoes'));
+  });
 }

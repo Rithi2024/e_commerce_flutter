@@ -12,8 +12,10 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:marketflow/config/payway_config.dart';
 import 'package:marketflow/config/support_config.dart';
 import 'package:marketflow/core/location/address_text.dart';
+import 'package:marketflow/core/pricing/event_deal_pricing.dart';
 import 'package:marketflow/features/cart/domain/entities/cart_line_item.dart';
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
+import 'package:marketflow/features/catalog/presentation/widgets/event_deal_chip.dart';
 import 'package:marketflow/features/settings/presentation/bloc/app_settings_provider.dart';
 import 'package:marketflow/features/settings/presentation/pages/user_profile_screen.dart';
 import 'package:marketflow/features/checkout/presentation/bloc/order_management_provider.dart';
@@ -375,6 +377,24 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
 
   double _roundUsd(double value) {
     return double.parse(value.toStringAsFixed(2));
+  }
+
+  EventDealPricing? _eventPricingForItem(
+    CartItem item,
+    AppSettingsProvider settings,
+  ) {
+    final eventDiscount = settings.activeDiscountForProduct(
+      productId: item.productId,
+    );
+    if (eventDiscount == null) {
+      return null;
+    }
+    return resolveEventDealPricing(
+      eventTitle: eventDiscount.eventTitle,
+      discountPercent: eventDiscount.discountPercent,
+      discountedUnitUsd: item.price,
+      quantity: item.qty,
+    );
   }
 
   double _effectivePromoDiscount(double subtotalUsd) {
@@ -1043,6 +1063,20 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
     }
     final promoCode = _appliedPromoCode.trim().toUpperCase();
     final payableTotal = _payableTotal(cart.total);
+    final orderItems = cart.items
+        .map(
+          (item) => CartItem(
+            id: item.id,
+            productId: item.productId,
+            name: item.name,
+            price: item.price,
+            imageUrl: item.imageUrl,
+            qty: item.qty,
+            size: item.size,
+            color: item.color,
+          ),
+        )
+        .toList(growable: false);
     if (payableTotal <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Order total must be greater than 0')),
@@ -1100,6 +1134,24 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
 
       if (!isPickup) {
         await orders.saveDefaultAddress(userId: user.id, address: address);
+      }
+      final customerEmail = (auth.user?.email ?? '').trim();
+      final customerName = _contactName.trim().isNotEmpty
+          ? _contactName.trim()
+          : (auth.user?.userMetadata?['name'] ?? '').toString().trim();
+      if (customerEmail.isNotEmpty && orderItems.isNotEmpty) {
+        unawaited(
+          orders
+              .sendOrderConfirmationEmail(
+                email: customerEmail,
+                userName: customerName,
+                orderId: createdOrderId,
+                total: payableTotal,
+                status: orderStatus,
+                items: orderItems,
+              )
+              .catchError((_) {}),
+        );
       }
       await cart.load();
 
@@ -1364,6 +1416,12 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
     AppSettingsProvider settings,
   ) {
     final compactLayout = MediaQuery.sizeOf(context).width < 420;
+    final eventDealLines = cart.items
+        .map((item) => _eventPricingForItem(item, settings))
+        .whereType<EventDealPricing>()
+        .toList();
+    final eventSummary = summarizeEventDealPricing(eventDealLines);
+    final regularSubtotal = cart.total + eventSummary.totalSavingsUsd;
     final promoDiscount = _effectivePromoDiscount(cart.total);
     final vatAmount = _vatAmount(cart.total);
     final payableTotal = _payableTotal(cart.total);
@@ -1378,12 +1436,73 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 10),
+          if (eventSummary.hasDeals) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEAF5F0),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFD2E8DF)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${eventSummary.headlineLabel} applied',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF173D36),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'You are saving ${settings.formatUsd(eventSummary.totalSavingsUsd, overrideDiscountPercent: 0)} across ${eventSummary.discountedItemCount} items before promo codes.',
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF557168),
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           ...cart.items.map((item) {
+            final eventPricing = _eventPricingForItem(item, settings);
             final variant = [
               item.size ?? '',
               item.color ?? '',
             ].where((e) => e.trim().isNotEmpty).join(', ');
-            final lineTotal = settings.formatUsd(item.price * item.qty);
+            final discountedUnitPrice = settings.formatUsd(
+              item.price,
+              overrideDiscountPercent: 0,
+            );
+            final regularUnitPrice = eventPricing == null
+                ? null
+                : settings.formatUsd(
+                    eventPricing.unitOriginalUsd,
+                    overrideDiscountPercent: 0,
+                  );
+            final lineTotal = settings.formatUsd(
+              item.subTotal,
+              overrideDiscountPercent: 0,
+            );
+            final regularLineTotal = eventPricing == null
+                ? null
+                : settings.formatUsd(
+                    eventPricing.lineOriginalUsd,
+                    overrideDiscountPercent: 0,
+                  );
+            final savingsLabel = eventPricing == null
+                ? null
+                : settings.formatUsd(
+                    eventPricing.lineSavingsUsd,
+                    overrideDiscountPercent: 0,
+                  );
             final itemInfo = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1395,6 +1514,65 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
                     fontSize: 16,
                     fontWeight: FontWeight.w500,
                   ),
+                ),
+                if (eventPricing != null) ...[
+                  const SizedBox(height: 6),
+                  EventDealChip(
+                    eventTitle: eventPricing.eventTitle,
+                    backgroundColor: const Color(0xFFE9F5F0),
+                    foregroundColor: const Color(0xFF173D36),
+                    borderColor: const Color(0xFFD6E6DF),
+                    fontSize: 10.5,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 5,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      '$discountedUnitPrice each',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: _accent,
+                      ),
+                    ),
+                    if (regularUnitPrice != null)
+                      Text(
+                        regularUnitPrice,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey.shade500,
+                          decoration: TextDecoration.lineThrough,
+                        ),
+                      ),
+                    if (savingsLabel != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEE8EE),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          'Save $savingsLabel',
+                          style: const TextStyle(
+                            color: Color(0xFFB62B53),
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 if (variant.isNotEmpty) ...[
                   const SizedBox(height: 4),
@@ -1450,12 +1628,30 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
                         const SizedBox(height: 8),
                         Align(
                           alignment: Alignment.centerRight,
-                          child: Text(
-                            lineTotal,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              color: _accent,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                lineTotal,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  color: _accent,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              if (regularLineTotal != null) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  regularLineTotal,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.grey.shade500,
+                                    decoration: TextDecoration.lineThrough,
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ),
                       ],
@@ -1490,9 +1686,30 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
                         const SizedBox(width: 12),
                         Expanded(child: itemInfo),
                         const SizedBox(width: 8),
-                        Text(
-                          lineTotal,
-                          style: const TextStyle(fontSize: 18, color: _accent),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              lineTotal,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                color: _accent,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            if (regularLineTotal != null) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                regularLineTotal,
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey.shade500,
+                                  decoration: TextDecoration.lineThrough,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ],
                     ),
@@ -1500,12 +1717,25 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
           }),
           const Divider(height: 1),
           const SizedBox(height: 10),
-          _moneyRow('Subtotal', cart.total, settings: settings),
+          if (eventSummary.hasDeals) ...[
+            _moneyRow('Regular price', regularSubtotal, settings: settings),
+            const SizedBox(height: 8),
+            _moneyRow(
+              'Event savings',
+              eventSummary.totalSavingsUsd,
+              settings: settings,
+              negative: true,
+              valueColor: const Color(0xFF0B7D69),
+            ),
+            const SizedBox(height: 8),
+            _moneyRow('Event price subtotal', cart.total, settings: settings),
+          ] else
+            _moneyRow('Subtotal', cart.total, settings: settings),
           const SizedBox(height: 8),
           _moneyRow('Delivery Fee', 0, settings: settings),
           const SizedBox(height: 8),
           _moneyRow(
-            'Discount',
+            'Promo discount',
             promoDiscount,
             settings: settings,
             negative: true,
@@ -1526,9 +1756,12 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
     required AppSettingsProvider settings,
     bool bold = false,
     bool negative = false,
+    Color? valueColor,
   }) {
     final priceText = settings.formatUsd(amount);
     final value = negative ? '-$priceText' : priceText;
+    final resolvedValueColor =
+        valueColor ?? (negative ? _accent : Colors.black);
     return Row(
       children: [
         Expanded(
@@ -1547,7 +1780,7 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
           value,
           style: TextStyle(
             fontSize: 16,
-            color: negative ? _accent : Colors.black,
+            color: resolvedValueColor,
             fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
           ),
         ),
@@ -1575,7 +1808,9 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
     AppSettingsProvider settings,
     double payableTotal, {
     bool centered = false,
+    String? supportingText,
   }) {
+    final safeSupportingText = (supportingText ?? '').trim();
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: centered
@@ -1602,6 +1837,19 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
             fontWeight: FontWeight.w700,
           ),
         ),
+        if (safeSupportingText.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            safeSupportingText,
+            textAlign: centered ? TextAlign.center : TextAlign.start,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.8),
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              height: 1.25,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -1612,6 +1860,14 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
     final settings = context.watch<AppSettingsProvider>();
     final screenWidth = MediaQuery.sizeOf(context).width;
     final compactBottomBar = screenWidth < 420;
+    final checkoutEventSummary = summarizeEventDealPricing(
+      cart.items
+          .map((item) => _eventPricingForItem(item, settings))
+          .whereType<EventDealPricing>(),
+    );
+    final bottomSummaryText = checkoutEventSummary.hasDeals
+        ? 'Saved ${settings.formatUsd(checkoutEventSummary.totalSavingsUsd, overrideDiscountPercent: 0)} with ${checkoutEventSummary.headlineLabel.toLowerCase()}.'
+        : null;
     final payableTotal = _payableTotal(cart.total);
     final hasAddressForOrder =
         _selectedDeliveryType == _deliveryPickup ||
@@ -1677,6 +1933,7 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
                                 settings,
                                 payableTotal,
                                 centered: true,
+                                supportingText: bottomSummaryText,
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -1719,6 +1976,7 @@ class _CheckoutFlowScreenState extends State<CheckoutFlowScreen> {
                                 child: _bottomTotalSummary(
                                   settings,
                                   payableTotal,
+                                  supportingText: bottomSummaryText,
                                 ),
                               ),
                             ),

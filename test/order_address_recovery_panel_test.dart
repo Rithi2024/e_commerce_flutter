@@ -134,6 +134,31 @@ void main() {
     );
   });
 
+  testWidgets('order event pricing card shows savings summary', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: OrderEventPricingCard(
+            eventTitle: 'Spring Launch',
+            headlineLabel: 'Spring Launch pricing',
+            savingsLabel: r'$20.80',
+            discountedItemCount: 2,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Spring Launch deal'), findsOneWidget);
+    expect(
+      find.text('Spring Launch pricing kept this order lower at checkout.'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('You saved \$20.80 across 2 items on this order.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('order address recovery panel exposes both recovery actions', (
     tester,
   ) async {

@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:marketflow/core/widgets/app_brand_logo.dart';
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
 import 'package:marketflow/features/auth/presentation/pages/auth_error_message.dart';
+import 'package:marketflow/features/auth/presentation/pages/verification_code_rules.dart';
 
 class SignupVerificationScreen extends StatefulWidget {
   final String initialEmail;
@@ -59,8 +60,8 @@ class _SignupVerificationScreenState extends State<SignupVerificationScreen> {
 
   String? _validateCode() {
     final code = _codeController.text.trim();
-    if (!RegExp(r'^\d{6}$').hasMatch(code)) {
-      return 'Enter a valid 6-digit code';
+    if (!isValidVerificationCode(code)) {
+      return 'Enter a valid verification code';
     }
     return null;
   }
@@ -123,7 +124,7 @@ class _SignupVerificationScreenState extends State<SignupVerificationScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            '6-digit verification code sent. Check inbox and spam folder.',
+            'Verification code sent. Check inbox and spam folder.',
           ),
         ),
       );
@@ -265,7 +266,7 @@ class _SignupVerificationScreenState extends State<SignupVerificationScreen> {
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          'Enter the 6-digit code from your email to finish signing in.',
+                          'Enter the verification code from your email to finish signing in.',
                           style: TextStyle(
                             fontSize: 14,
                             height: 1.45,
@@ -318,7 +319,7 @@ class _SignupVerificationScreenState extends State<SignupVerificationScreen> {
                           onTapOutside: (_) => _dismissKeyboard(),
                         ),
                         const SizedBox(height: 16),
-                        _buildFieldLabel('6-digit code'),
+                        _buildFieldLabel('Verification code'),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _codeController,
@@ -327,15 +328,17 @@ class _SignupVerificationScreenState extends State<SignupVerificationScreen> {
                           style: const TextStyle(
                             fontSize: 24,
                             fontWeight: FontWeight.w700,
-                            letterSpacing: 8,
+                            letterSpacing: 6,
                           ),
-                          maxLength: 6,
+                          maxLength: verificationCodeMaxLength,
                           inputFormatters: <TextInputFormatter>[
                             FilteringTextInputFormatter.digitsOnly,
-                            LengthLimitingTextInputFormatter(6),
+                            LengthLimitingTextInputFormatter(
+                              verificationCodeMaxLength,
+                            ),
                           ],
                           decoration: _decoration(
-                            hint: '123456',
+                            hint: '12345678',
                             icon: Icons.password_rounded,
                           ).copyWith(counterText: ''),
                           onTapOutside: (_) => _dismissKeyboard(),

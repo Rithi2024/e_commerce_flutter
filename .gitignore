@@ -3,6 +3,7 @@
 Thumbs.db
 *.log
 *.tmp
+.tmp_*
 .tmp_*.md
 *.swp
 emulator_*.png
@@ -12,6 +13,8 @@ temp_profile.png
 walkthrough_start.png
 profile_check.png
 window_dump.xml
+.tmp*.xml
+.tmp*.txt
 .flutter-sdk/
 .flutter-sdk.version
 

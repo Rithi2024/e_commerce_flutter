@@ -1,3 +1,4 @@
+import 'package:marketflow/config/auth_email_config.dart';
 import 'package:marketflow/config/payway_config.dart';
 import 'package:marketflow/core/auth/profile_identity_text.dart';
 import 'package:marketflow/core/location/address_text.dart';
@@ -58,6 +59,59 @@ class SupabaseOrderRepository implements OrderRepository {
       throw Exception('Order was not created. Please try again.');
     }
     return parsedOrderId;
+  }
+
+  @override
+  Future<void> sendOrderConfirmationEmail({
+    required String email,
+    required String userName,
+    required int orderId,
+    required double total,
+    required String status,
+    required List<CartItem> items,
+  }) async {
+    final cleanEmail = email.trim().toLowerCase();
+    if (cleanEmail.isEmpty || orderId <= 0 || items.isEmpty) {
+      return;
+    }
+
+    final payload = <String, dynamic>{
+      'operation': 'send_order_confirmation',
+      'email': cleanEmail,
+      'user_name': userName.trim(),
+      'order_id': orderId,
+      'total': double.parse(total.toStringAsFixed(2)),
+      'status': status.trim(),
+      'items': items
+          .map(
+            (item) => <String, dynamic>{
+              'name': item.name,
+              'qty': item.qty,
+              'price': double.parse(item.price.toStringAsFixed(2)),
+              'size': item.size ?? '',
+              'color': item.color ?? '',
+            },
+          )
+          .toList(growable: false),
+    };
+
+    Object? lastNotFound;
+    for (final functionName in _candidateAuthEmailFunctionNames()) {
+      try {
+        await _functionProxy.invoke(functionName, body: payload);
+        return;
+      } on FunctionException catch (error) {
+        if (_isFunctionNotFound(error)) {
+          lastNotFound = error;
+          continue;
+        }
+        rethrow;
+      }
+    }
+
+    if (lastNotFound != null) {
+      throw lastNotFound;
+    }
   }
 
   static int parseOrderId(dynamic value) {
@@ -449,7 +503,7 @@ class SupabaseOrderRepository implements OrderRepository {
         .toUpperCase();
     if (errorCode == 'NOT_FOUND' ||
         errorMessage.contains('REQUESTED FUNCTION WAS NOT FOUND')) {
-      return 'PayWay service is not deployed. Deploy the Supabase Edge Function "Payway" (or "payway-qr").';
+      return 'PayWay service is not deployed. Deploy the Supabase Edge Function "payway-qr".';
     }
     final message = _extractPayWayMessage(data);
     return message.isEmpty ? 'PayWay request failed' : message;
@@ -598,7 +652,22 @@ class SupabaseOrderRepository implements OrderRepository {
   List<String> _candidatePayWayFunctionNames() {
     final configured = PayWayConfig.functionName.trim();
     final seen = <String>{};
-    final names = <String>[configured, 'payway-qr', 'Payway', 'payway'];
+    final names = <String>[configured, 'payway-qr'];
+    final result = <String>[];
+    for (final name in names) {
+      final value = name.trim();
+      if (value.isEmpty) continue;
+      if (seen.contains(value)) continue;
+      seen.add(value);
+      result.add(value);
+    }
+    return result;
+  }
+
+  List<String> _candidateAuthEmailFunctionNames() {
+    final configured = AuthEmailConfig.functionName.trim();
+    final seen = <String>{};
+    final names = <String>[configured, 'resend-email'];
     final result = <String>[];
     for (final name in names) {
       final value = name.trim();
@@ -616,6 +685,18 @@ class SupabaseOrderRepository implements OrderRepository {
     final message = (data['message'] ?? '').toString().trim().toUpperCase();
     return code == 'NOT_FOUND' ||
         message.contains('REQUESTED FUNCTION WAS NOT FOUND');
+  }
+
+  bool _isFunctionNotFound(FunctionException error) {
+    if (error.status != 404) return false;
+    final details = error.details;
+    if (details is Map) {
+      final code = (details['code'] ?? '').toString().trim().toUpperCase();
+      final message = (details['message'] ?? '').toString().trim().toUpperCase();
+      return code == 'NOT_FOUND' ||
+          message.contains('REQUESTED FUNCTION WAS NOT FOUND');
+    }
+    return true;
   }
 
   bool _isRpcMissing(Object error) {

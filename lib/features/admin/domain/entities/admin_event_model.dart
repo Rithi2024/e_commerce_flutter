@@ -44,6 +44,40 @@ class AdminEvent {
     return !expires.isAfter(DateTime.now().toUtc());
   }
 
+  String get statusKey {
+    if (isExpired) return 'expired';
+    if (!isActive) return 'inactive';
+    if (isUpcoming) return 'upcoming';
+    return 'active';
+  }
+
+  String get statusLabel {
+    switch (statusKey) {
+      case 'expired':
+        return 'Expired';
+      case 'inactive':
+        return 'Inactive';
+      case 'upcoming':
+        return 'Upcoming';
+      default:
+        return 'Active';
+    }
+  }
+
+  Duration? get timeUntilStart {
+    if (!isUpcoming) return null;
+    final starts = startsAt;
+    if (starts == null) return null;
+    return starts.difference(DateTime.now().toUtc());
+  }
+
+  Duration? get timeUntilEnd {
+    if (!isLive) return null;
+    final expires = expiresAt;
+    if (expires == null) return null;
+    return expires.difference(DateTime.now().toUtc());
+  }
+
   factory AdminEvent.fromMap(Map<String, dynamic> data) {
     return AdminEvent(
       id: (data['id'] ?? '').toString(),

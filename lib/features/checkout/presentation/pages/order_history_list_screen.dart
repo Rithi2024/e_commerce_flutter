@@ -9,12 +9,14 @@ import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 
 import 'package:marketflow/core/location/address_text.dart';
+import 'package:marketflow/core/pricing/event_deal_pricing.dart';
 import 'package:marketflow/core/support/support_notification_store.dart';
 import 'package:marketflow/core/support/support_notification_summary.dart';
 import 'package:marketflow/core/support/support_request_link.dart';
 import 'package:marketflow/features/checkout/domain/entities/checkout_prefill_model.dart';
 import 'package:marketflow/features/checkout/presentation/pages/checkout_address_selection_screen.dart';
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
+import 'package:marketflow/features/catalog/presentation/widgets/event_deal_chip.dart';
 import 'package:marketflow/features/checkout/presentation/bloc/order_management_provider.dart';
 import 'package:marketflow/features/settings/presentation/bloc/app_settings_provider.dart';
 import 'package:marketflow/features/support/presentation/pages/customer_support_screen.dart';
@@ -215,8 +217,9 @@ class _OrderHistoryListScreenState extends State<OrderHistoryListScreen> {
   ) {
     if (history.isEmpty) return null;
     for (final item in history) {
-      if (_normalizeSupportRequestStatus(item['support_request_status'])
-          .isNotEmpty) {
+      if (_normalizeSupportRequestStatus(
+        item['support_request_status'],
+      ).isNotEmpty) {
         return item;
       }
     }
@@ -245,10 +248,9 @@ class _OrderHistoryListScreenState extends State<OrderHistoryListScreen> {
   DateTime? _latestSupportActivityAt(Map<String, dynamic> order) {
     final orderId = _toInt(order['id'], fallback: -1);
     if (orderId <= 0) return null;
-    return latestSupportNotificationActivityAtForOrder(
-      <Map<String, dynamic>>[order],
-      orderId,
-    );
+    return latestSupportNotificationActivityAtForOrder(<Map<String, dynamic>>[
+      order,
+    ], orderId);
   }
 
   bool _isOrderSupportUnread(Map<String, dynamic> order) {
@@ -451,6 +453,43 @@ class _OrderHistoryListScreenState extends State<OrderHistoryListScreen> {
     return double.tryParse(value?.toString() ?? '') ?? fallback;
   }
 
+  EventDealPricing? _orderEventPricingFromItem(
+    Map<String, dynamic> item,
+    AppSettingsProvider settings,
+  ) {
+    final productId = (item['product_id'] ?? item['productId'] ?? '')
+        .toString()
+        .trim();
+    if (productId.isEmpty) {
+      return null;
+    }
+
+    final eventDiscount = settings.activeDiscountForProduct(
+      productId: productId,
+    );
+    if (eventDiscount == null) {
+      return null;
+    }
+
+    return resolveEventDealPricing(
+      eventTitle: eventDiscount.eventTitle,
+      discountPercent: eventDiscount.discountPercent,
+      discountedUnitUsd: _toDouble(item['price']),
+      quantity: _toInt(item['qty'], fallback: 1),
+    );
+  }
+
+  EventDealPricingSummary _orderEventSummary(
+    List<Map<String, dynamic>> items,
+    AppSettingsProvider settings,
+  ) {
+    return summarizeEventDealPricing(
+      items
+          .map((item) => _orderEventPricingFromItem(item, settings))
+          .whereType<EventDealPricing>(),
+    );
+  }
+
   String _money(dynamic value, AppSettingsProvider settings) {
     return settings.formatUsd(_toDouble(value));
   }
@@ -614,6 +653,7 @@ class _OrderHistoryListScreenState extends State<OrderHistoryListScreen> {
     final settings = context.read<AppSettingsProvider>();
     final pdf = pw.Document();
     final items = _extractItems(order['items']);
+    final eventSummary = _orderEventSummary(items, settings);
     final orderId = (order['id'] ?? '').toString();
     final status = _orderStatusLabel(order['status']);
     final deliveryType = _deliveryTypeLabel(order['delivery_type']);
@@ -668,6 +708,39 @@ class _OrderHistoryListScreenState extends State<OrderHistoryListScreen> {
           pw.Text('Delivery type: $deliveryType'),
           pw.Text('Line items: ${items.length}'),
           pw.Text('Total quantity: $totalQty'),
+          if (eventSummary.hasDeals) ...[
+            pw.SizedBox(height: 8),
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(10),
+              decoration: pw.BoxDecoration(
+                color: const PdfColor.fromInt(0xFFEAF5F0),
+                borderRadius: pw.BorderRadius.circular(10),
+                border: pw.Border.all(
+                  color: const PdfColor.fromInt(0xFFD2E8DF),
+                ),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    '${eventSummary.headlineLabel} applied',
+                    style: pw.TextStyle(
+                      fontWeight: pw.FontWeight.bold,
+                      color: const PdfColor.fromInt(0xFF173D36),
+                    ),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    'Event savings included: ${_money(eventSummary.totalSavingsUsd, settings)} across ${eventSummary.discountedItemCount} items.',
+                    style: pw.TextStyle(
+                      color: const PdfColor.fromInt(0xFF557168),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           pw.SizedBox(height: 12),
           pw.Text(
             'Shipping Address',
@@ -698,9 +771,25 @@ class _OrderHistoryListScreenState extends State<OrderHistoryListScreen> {
           pw.SizedBox(height: 16),
           pw.Align(
             alignment: pw.Alignment.centerRight,
-            child: pw.Text(
-              'Total: ${_money(total, settings)}',
-              style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.end,
+              children: [
+                if (eventSummary.hasDeals)
+                  pw.Text(
+                    'Event savings: -${_money(eventSummary.totalSavingsUsd, settings)}',
+                    style: pw.TextStyle(
+                      color: const PdfColor.fromInt(0xFF0B7D69),
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                pw.Text(
+                  'Total: ${_money(total, settings)}',
+                  style: pw.TextStyle(
+                    fontSize: 16,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -812,6 +901,8 @@ class _OrderHistoryListScreenState extends State<OrderHistoryListScreen> {
                 final paymentReference = (order['payment_reference'] ?? '')
                     .toString()
                     .trim();
+                final items = _extractItems(order['items']);
+                final eventSummary = _orderEventSummary(items, settings);
                 final address = AddressText.deliveryAddressOrEmpty(
                   (order['address'] ?? '').toString(),
                 );
@@ -865,6 +956,18 @@ class _OrderHistoryListScreenState extends State<OrderHistoryListScreen> {
                         'Total: ${settings.formatUsd(total)}',
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
+                      if (eventSummary.hasDeals) ...[
+                        const SizedBox(height: 10),
+                        OrderEventPricingCard(
+                          eventTitle: eventSummary.singleEventTitle,
+                          headlineLabel: eventSummary.headlineLabel,
+                          savingsLabel: settings.formatUsd(
+                            eventSummary.totalSavingsUsd,
+                            overrideDiscountPercent: 0,
+                          ),
+                          discountedItemCount: eventSummary.discountedItemCount,
+                        ),
+                      ],
                       const SizedBox(height: 6),
                       Text('Order: #$orderId'),
                       const SizedBox(height: 4),
@@ -1203,6 +1306,71 @@ class OrderSupportStatusCard extends StatelessWidget {
               ],
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class OrderEventPricingCard extends StatelessWidget {
+  const OrderEventPricingCard({
+    super.key,
+    required this.headlineLabel,
+    required this.savingsLabel,
+    required this.discountedItemCount,
+    this.eventTitle,
+  });
+
+  final String? eventTitle;
+  final String headlineLabel;
+  final String savingsLabel;
+  final int discountedItemCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeEventTitle = (eventTitle ?? '').trim();
+    final itemLabel = discountedItemCount == 1 ? 'item' : 'items';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF5F0),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFD2E8DF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (safeEventTitle.isNotEmpty) ...[
+            EventDealChip(
+              eventTitle: safeEventTitle,
+              backgroundColor: Colors.white,
+              foregroundColor: const Color(0xFF173D36),
+              borderColor: const Color(0xFFD6E6DF),
+              fontSize: 10.5,
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+            ),
+            const SizedBox(height: 8),
+          ],
+          Text(
+            '$headlineLabel kept this order lower at checkout.',
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF173D36),
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'You saved $savingsLabel across $discountedItemCount $itemLabel on this order.',
+            style: const TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF557168),
+              height: 1.35,
+            ),
+          ),
         ],
       ),
     );

@@ -37,6 +37,17 @@ const DEFAULT_ALLOWED_RPCS = [
   'rpc_admin_update_product',
   'rpc_admin_delete_product',
 ];
+const {
+  createRequestContext,
+  durationMs,
+  listObjectKeys,
+  logError,
+  logInfo,
+  logWarning,
+  safeError,
+  sanitizeValue,
+  truncate,
+} = require('./_logging');
 
 const DEFAULT_ALLOWED_TABLES = [
   'profiles',
@@ -142,6 +153,47 @@ function buildOrderClause(orders) {
     .join(',');
 }
 
+function summarizeFilters(filters) {
+  if (!Array.isArray(filters)) return [];
+  return filters.slice(0, 10).map((rawFilter) => {
+    const filter =
+      rawFilter && typeof rawFilter === 'object' ? rawFilter : {};
+    return {
+      column: String(filter.column || '').trim(),
+      op: String(filter.op || '').trim().toLowerCase(),
+      value: sanitizeValue(filter.value, String(filter.column || '')),
+    };
+  });
+}
+
+function summarizeOrders(orders) {
+  if (!Array.isArray(orders)) return [];
+  return orders.slice(0, 10).map((rawOrder) => {
+    const order =
+      rawOrder && typeof rawOrder === 'object' ? rawOrder : {};
+    return {
+      column: String(order.column || '').trim(),
+      ascending: order.ascending !== false,
+      nullsFirst:
+        typeof order.nullsFirst === 'boolean' ? order.nullsFirst : undefined,
+    };
+  });
+}
+
+function summarizeValues(values) {
+  if (Array.isArray(values)) {
+    return {
+      type: 'array',
+      length: values.length,
+      sampleKeys: values.slice(0, 3).map((item) => listObjectKeys(item)),
+    };
+  }
+  return {
+    type: values && typeof values === 'object' ? 'object' : typeof values,
+    keys: listObjectKeys(values),
+  };
+}
+
 async function forwardToSupabase({
   req,
   supabaseUrl,
@@ -183,6 +235,7 @@ async function forwardToSupabase({
 }
 
 module.exports = async (req, res) => {
+  const context = createRequestContext(req, 'supabase_data_proxy');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader(
@@ -190,12 +243,31 @@ module.exports = async (req, res) => {
     'Content-Type, Authorization',
   );
 
+  logInfo('proxy.data.request_received', {
+    requestId: context.requestId,
+    scope: context.scope,
+    method: context.method,
+    path: context.path,
+    clientIp: context.clientIp,
+    hasAuthorizationHeader: context.hasAuthorizationHeader,
+    userAgent: context.userAgent,
+  });
+
   if (req.method === 'OPTIONS') {
+    logInfo('proxy.data.preflight', {
+      requestId: context.requestId,
+      durationMs: durationMs(context),
+    });
     res.status(204).end();
     return;
   }
 
   if (req.method !== 'POST') {
+    logWarning('proxy.data.method_not_allowed', {
+      requestId: context.requestId,
+      method: req.method,
+      durationMs: durationMs(context),
+    });
     json(res, 405, {
       code: 'METHOD_NOT_ALLOWED',
       message: 'Use POST',
@@ -206,6 +278,12 @@ module.exports = async (req, res) => {
   const supabaseUrl = (process.env.SUPABASE_URL || '').trim();
   const supabaseAnonKey = (process.env.SUPABASE_ANON_KEY || '').trim();
   if (!supabaseUrl || !supabaseAnonKey) {
+    logError('proxy.data.missing_supabase_config', {
+      requestId: context.requestId,
+      hasSupabaseUrl: supabaseUrl.length > 0,
+      hasSupabaseAnonKey: supabaseAnonKey.length > 0,
+      durationMs: durationMs(context),
+    });
     json(res, 500, {
       code: 'MISSING_SUPABASE_CONFIG',
       message: 'SUPABASE_URL and SUPABASE_ANON_KEY are required',
@@ -224,12 +302,21 @@ module.exports = async (req, res) => {
 
   const body = readBody(req);
   const kind = String(body.kind || '').trim().toLowerCase();
+  let operationSummary = {
+    kind,
+    bodyKeys: listObjectKeys(body),
+  };
 
   let upstreamResponse;
   try {
     if (kind === 'rpc') {
       const rpc = String(body.rpc || '').trim();
       if (!rpc) {
+        logWarning('proxy.data.invalid_rpc_name', {
+          requestId: context.requestId,
+          bodyKeys: listObjectKeys(body),
+          durationMs: durationMs(context),
+        });
         json(res, 400, {
           code: 'INVALID_RPC_NAME',
           message: 'rpc is required',
@@ -237,6 +324,11 @@ module.exports = async (req, res) => {
         return;
       }
       if (!allowedRpcs.has(rpc)) {
+        logWarning('proxy.data.rpc_not_allowed', {
+          requestId: context.requestId,
+          rpc,
+          durationMs: durationMs(context),
+        });
         json(res, 403, {
           code: 'RPC_NOT_ALLOWED',
           message: `RPC "${rpc}" is not allowed`,
@@ -245,6 +337,15 @@ module.exports = async (req, res) => {
       }
       const params =
         body.params && typeof body.params === 'object' ? body.params : {};
+      operationSummary = {
+        kind,
+        rpc,
+        paramKeys: listObjectKeys(params),
+      };
+      logInfo('proxy.data.forwarding_rpc', {
+        requestId: context.requestId,
+        ...operationSummary,
+      });
       upstreamResponse = await forwardToSupabase({
         req,
         supabaseUrl,
@@ -257,6 +358,11 @@ module.exports = async (req, res) => {
       const action = String(body.action || '').trim().toLowerCase();
       const table = String(body.table || '').trim();
       if (!table) {
+        logWarning('proxy.data.invalid_table_name', {
+          requestId: context.requestId,
+          bodyKeys: listObjectKeys(body),
+          durationMs: durationMs(context),
+        });
         json(res, 400, {
           code: 'INVALID_TABLE_NAME',
           message: 'table is required',
@@ -264,6 +370,12 @@ module.exports = async (req, res) => {
         return;
       }
       if (!allowedTables.has(table)) {
+        logWarning('proxy.data.table_not_allowed', {
+          requestId: context.requestId,
+          table,
+          action,
+          durationMs: durationMs(context),
+        });
         json(res, 403, {
           code: 'TABLE_NOT_ALLOWED',
           message: `Table "${table}" is not allowed`,
@@ -272,6 +384,7 @@ module.exports = async (req, res) => {
       }
 
       const filters = Array.isArray(body.filters) ? body.filters : [];
+      const filterSummary = summarizeFilters(filters);
       const search = new URLSearchParams();
       for (const rawFilter of filters) {
         const filter =
@@ -280,6 +393,14 @@ module.exports = async (req, res) => {
         if (!column) continue;
         const expr = encodeFilterExpression(filter.op, filter.value);
         if (!expr) {
+          logWarning('proxy.data.unsupported_filter_op', {
+            requestId: context.requestId,
+            table,
+            action,
+            column,
+            op: String(filter.op || ''),
+            durationMs: durationMs(context),
+          });
           json(res, 400, {
             code: 'UNSUPPORTED_FILTER_OP',
             message: `Unsupported filter op "${filter.op}"`,
@@ -299,6 +420,21 @@ module.exports = async (req, res) => {
         if (Number.isInteger(body.limit) && body.limit > 0) {
           search.set('limit', String(body.limit));
         }
+        operationSummary = {
+          kind,
+          table,
+          action,
+          columns,
+          limit: Number.isInteger(body.limit) && body.limit > 0
+            ? body.limit
+            : undefined,
+          filters: filterSummary,
+          orders: summarizeOrders(body.orders),
+        };
+        logInfo('proxy.data.forwarding_table_select', {
+          requestId: context.requestId,
+          ...operationSummary,
+        });
         upstreamResponse = await forwardToSupabase({
           req,
           supabaseUrl,
@@ -315,6 +451,19 @@ module.exports = async (req, res) => {
         if (returning) {
           search.set('select', columns);
         }
+        operationSummary = {
+          kind,
+          table,
+          action,
+          returning,
+          columns: returning ? columns : undefined,
+          filters: filterSummary,
+          values: summarizeValues(values),
+        };
+        logInfo('proxy.data.forwarding_table_update', {
+          requestId: context.requestId,
+          ...operationSummary,
+        });
         upstreamResponse = await forwardToSupabase({
           req,
           supabaseUrl,
@@ -339,6 +488,19 @@ module.exports = async (req, res) => {
         const prefer = returning
           ? 'resolution=merge-duplicates,return=representation'
           : 'resolution=merge-duplicates,return=minimal';
+        operationSummary = {
+          kind,
+          table,
+          action,
+          onConflict: onConflict || undefined,
+          returning,
+          columns: returning ? columns : undefined,
+          values: summarizeValues(values),
+        };
+        logInfo('proxy.data.forwarding_table_upsert', {
+          requestId: context.requestId,
+          ...operationSummary,
+        });
         upstreamResponse = await forwardToSupabase({
           req,
           supabaseUrl,
@@ -350,6 +512,12 @@ module.exports = async (req, res) => {
           prefer,
         });
       } else {
+        logWarning('proxy.data.invalid_table_action', {
+          requestId: context.requestId,
+          table,
+          action,
+          durationMs: durationMs(context),
+        });
         json(res, 400, {
           code: 'INVALID_TABLE_ACTION',
           message: 'action must be one of: select, update, upsert',
@@ -357,6 +525,12 @@ module.exports = async (req, res) => {
         return;
       }
     } else {
+      logWarning('proxy.data.invalid_proxy_kind', {
+        requestId: context.requestId,
+        kind,
+        bodyKeys: listObjectKeys(body),
+        durationMs: durationMs(context),
+      });
       json(res, 400, {
         code: 'INVALID_PROXY_KIND',
         message: 'kind must be "rpc" or "table"',
@@ -364,6 +538,12 @@ module.exports = async (req, res) => {
       return;
     }
   } catch (error) {
+    logError('proxy.data.upstream_request_failed', {
+      requestId: context.requestId,
+      durationMs: durationMs(context),
+      operation: operationSummary,
+      error: safeError(error),
+    });
     json(res, 502, {
       code: 'UPSTREAM_REQUEST_FAILED',
       message: error instanceof Error ? error.message : 'Unknown proxy error',
@@ -375,7 +555,26 @@ module.exports = async (req, res) => {
     upstreamResponse.headers.get('content-type') ||
     'application/json; charset=utf-8';
   const rawText = await upstreamResponse.text();
+  const responseBody = rawText.trim().length === 0 ? '{}' : rawText;
+  if (upstreamResponse.status >= 400) {
+    logWarning('proxy.data.upstream_failed', {
+      requestId: context.requestId,
+      durationMs: durationMs(context),
+      operation: operationSummary,
+      upstreamStatus: upstreamResponse.status,
+      contentType,
+      responsePreview: truncate(responseBody, 240),
+    });
+  } else {
+    logInfo('proxy.data.upstream_succeeded', {
+      requestId: context.requestId,
+      durationMs: durationMs(context),
+      operation: operationSummary,
+      upstreamStatus: upstreamResponse.status,
+      contentType,
+    });
+  }
   res.status(upstreamResponse.status);
   res.setHeader('Content-Type', contentType);
-  res.send(rawText.trim().length === 0 ? '{}' : rawText);
+  res.send(responseBody);
 };

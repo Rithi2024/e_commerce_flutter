@@ -12,6 +12,7 @@ import 'package:marketflow/core/support/support_notification_summary.dart';
 import 'package:marketflow/core/widgets/logout_prompt_dialog.dart';
 import 'package:marketflow/features/admin/presentation/pages/admin_dashboard_screen.dart';
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
+import 'package:marketflow/features/auth/presentation/pages/verification_code_rules.dart';
 import 'package:marketflow/features/checkout/presentation/bloc/order_management_provider.dart';
 import 'package:marketflow/features/checkout/presentation/pages/checkout_address_selection_screen.dart';
 import 'package:marketflow/features/checkout/presentation/pages/order_history_list_screen.dart';
@@ -366,7 +367,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'If email changes, a 6-digit confirmation code is required.',
+                    'If email changes, a confirmation code is required.',
                     style: TextStyle(fontSize: 12, color: Color(0xFF5B6570)),
                   ),
                   if (dialogError.isNotEmpty) ...[
@@ -692,7 +693,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Enter the 6-digit confirmation code sent to $email',
+                    'Enter the confirmation code sent to $email',
                     style: const TextStyle(
                       fontSize: 12,
                       color: Color(0xFF5B6570),
@@ -702,7 +703,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   TextField(
                     controller: codeController,
                     keyboardType: TextInputType.number,
-                    maxLength: 6,
+                    maxLength: verificationCodeMaxLength,
                     decoration: const InputDecoration(
                       labelText: 'Confirmation code',
                       border: OutlineInputBorder(),
@@ -729,9 +730,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 ElevatedButton(
                   onPressed: () {
                     final code = codeController.text.trim();
-                    if (!RegExp(r'^\d{6}$').hasMatch(code)) {
+                    if (!isValidVerificationCode(code)) {
                       setDialogState(
-                        () => dialogError = 'Enter a valid 6-digit code',
+                        () => dialogError = 'Enter a valid confirmation code',
                       );
                       return;
                     }
@@ -1212,6 +1213,186 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
   }
 
+  Widget _buildAccountSnapshotCard(User user, AuthenticationProvider auth) {
+    final completionPercent = _profileCompletionPercent(user);
+    final completionFraction = completionPercent / 100;
+    final checklist = _profileCompletionChecklist(user);
+    final hasAddress = AddressText.deliveryAddressOrEmpty(_address).isNotEmpty;
+    final emailVerified = user.emailConfirmedAt != null;
+    final unreadSupport = _supportNotifications.unreadCount;
+    final supportLabel = _hasSupportDraft
+        ? 'Draft saved'
+        : unreadSupport > 0
+        ? '$unreadSupport update${unreadSupport == 1 ? '' : 's'}'
+        : _supportNotifications.hasActiveRequests
+        ? '${_supportNotifications.activeRequestCount} open'
+        : 'Caught up';
+
+    return _buildSectionCard(
+      title: 'Account Snapshot',
+      subtitle:
+          'See what is ready for checkout and what still needs attention.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFEAF6F2), Color(0xFFF1F6FB)],
+              ),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFD7E6DF)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Profile completion',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF597069),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '$completionPercent%',
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w900,
+                              color: Color(0xFF12352E),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _buildInlineBadge(
+                      label: completionPercent >= 100
+                          ? 'Ready'
+                          : checklist.length == 1
+                          ? '1 step left'
+                          : '${checklist.length} steps left',
+                      background: completionPercent >= 100
+                          ? const Color(0xFFE8F4EF)
+                          : const Color(0xFFFFF0E8),
+                      foreground: completionPercent >= 100
+                          ? const Color(0xFF0B6F58)
+                          : const Color(0xFFB85A00),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    value: completionFraction.clamp(0, 1),
+                    minHeight: 10,
+                    backgroundColor: const Color(0xFFD9E8E2),
+                    color: const Color(0xFF0D8B6F),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  completionPercent >= 100
+                      ? 'Your account is ready for smoother checkout, support, and order tracking.'
+                      : 'Finish the remaining details so checkout, delivery, and support stay friction-free.',
+                  style: const TextStyle(
+                    color: Color(0xFF4D5F59),
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _SnapshotMetricTile(
+                label: 'Address',
+                value: hasAddress ? 'Ready' : 'Needed',
+                icon: hasAddress
+                    ? Icons.location_on_outlined
+                    : Icons.location_off_outlined,
+              ),
+              _SnapshotMetricTile(
+                label: 'Email',
+                value: emailVerified ? 'Verified' : 'Pending',
+                icon: emailVerified
+                    ? Icons.mark_email_read_outlined
+                    : Icons.mark_email_unread_outlined,
+              ),
+              _SnapshotMetricTile(
+                label: 'Support',
+                value: supportLabel,
+                icon: _hasSupportDraft
+                    ? Icons.edit_note_outlined
+                    : Icons.support_agent_outlined,
+              ),
+              _SnapshotMetricTile(
+                label: 'Membership',
+                value: _memberSinceLabel(user),
+                icon: Icons.workspace_premium_outlined,
+              ),
+            ],
+          ),
+          if (checklist.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            const Text(
+              'Next best steps',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF5D6E67),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: checklist.map((item) {
+                return _buildInlineBadge(
+                  label: item,
+                  background: const Color(0xFFF7F4EA),
+                  foreground: const Color(0xFF7A5A1C),
+                );
+              }).toList(),
+            ),
+          ],
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: () => _handleSnapshotPrimaryAction(auth, user),
+                icon: Icon(_snapshotPrimaryActionIcon(user)),
+                label: Text(_snapshotPrimaryActionLabel(user)),
+              ),
+              OutlinedButton.icon(
+                onPressed: () =>
+                    _openOrders(auth, initialOrderId: _primarySupportOrderId()),
+                icon: const Icon(Icons.receipt_long_outlined),
+                label: const Text('Review orders'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStatusChip({
     required IconData icon,
     required String label,
@@ -1542,6 +1723,128 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
   }
 
+  int _profileCompletionPercent(User user) {
+    final checkpoints = <bool>[
+      _displayName(user).trim().isNotEmpty,
+      _phone.replaceAll(RegExp(r'[^0-9]'), '').length >= 8,
+      AddressText.deliveryAddressOrEmpty(_address).isNotEmpty,
+      user.emailConfirmedAt != null,
+      _avatarUrl.trim().isNotEmpty,
+    ];
+    final completed = checkpoints.where((value) => value).length;
+    return ((completed / checkpoints.length) * 100).round();
+  }
+
+  List<String> _profileCompletionChecklist(User user) {
+    final items = <String>[];
+    if (_displayName(user).trim().isEmpty) {
+      items.add('Add your full name');
+    }
+    if (_phone.replaceAll(RegExp(r'[^0-9]'), '').length < 8) {
+      items.add('Add a valid phone number');
+    }
+    if (AddressText.deliveryAddressOrEmpty(_address).isEmpty) {
+      items.add('Save a delivery address');
+    }
+    if (user.emailConfirmedAt == null) {
+      items.add('Verify your email');
+    }
+    if (_avatarUrl.trim().isEmpty) {
+      items.add('Upload a profile photo');
+    }
+    return items;
+  }
+
+  String _memberSinceLabel(User user) {
+    final parsed = DateTime.tryParse(user.createdAt);
+    if (parsed == null) {
+      return 'Active';
+    }
+    const monthLabels = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${monthLabels[parsed.month - 1]} ${parsed.year}';
+  }
+
+  String _snapshotPrimaryActionLabel(User user) {
+    if (AddressText.deliveryAddressOrEmpty(_address).isEmpty) {
+      return 'Add address';
+    }
+    if (_displayName(user).trim().isEmpty ||
+        _phone.replaceAll(RegExp(r'[^0-9]'), '').length < 8) {
+      return 'Update details';
+    }
+    if (user.emailConfirmedAt == null) {
+      return 'Review security';
+    }
+    if (_avatarUrl.trim().isEmpty) {
+      return 'Add photo';
+    }
+    if (_hasSupportDraft || _supportNotifications.hasUnread) {
+      return 'Review support';
+    }
+    return 'Manage profile';
+  }
+
+  IconData _snapshotPrimaryActionIcon(User user) {
+    if (AddressText.deliveryAddressOrEmpty(_address).isEmpty) {
+      return Icons.add_location_alt_outlined;
+    }
+    if (_displayName(user).trim().isEmpty ||
+        _phone.replaceAll(RegExp(r'[^0-9]'), '').length < 8) {
+      return Icons.edit_outlined;
+    }
+    if (user.emailConfirmedAt == null) {
+      return Icons.security_outlined;
+    }
+    if (_avatarUrl.trim().isEmpty) {
+      return Icons.photo_camera_outlined;
+    }
+    if (_hasSupportDraft || _supportNotifications.hasUnread) {
+      return Icons.support_agent_outlined;
+    }
+    return Icons.person_outline;
+  }
+
+  Future<void> _handleSnapshotPrimaryAction(
+    AuthenticationProvider auth,
+    User user,
+  ) async {
+    if (AddressText.deliveryAddressOrEmpty(_address).isEmpty) {
+      await _manageAddress(auth);
+      return;
+    }
+    if (_displayName(user).trim().isEmpty ||
+        _phone.replaceAll(RegExp(r'[^0-9]'), '').length < 8) {
+      await _editContactInfo(auth);
+      return;
+    }
+    if (user.emailConfirmedAt == null) {
+      await _changePassword(auth);
+      return;
+    }
+    if (_avatarUrl.trim().isEmpty) {
+      await _showAvatarActions(auth);
+      return;
+    }
+    if (_hasSupportDraft || _supportNotifications.hasUnread) {
+      await _openCustomerSupport(auth);
+      return;
+    }
+    await _editContactInfo(auth);
+  }
+
   Widget _buildSwitchTile({
     required String title,
     required String subtitle,
@@ -1577,7 +1880,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   }
 
   Future<void> _openCustomerSupport(AuthenticationProvider auth) async {
-    final latestSupportItem = !_hasSupportDraft && _supportNotifications.items.isNotEmpty
+    final latestSupportItem =
+        !_hasSupportDraft && _supportNotifications.items.isNotEmpty
         ? _supportNotifications.items.first
         : null;
     await Navigator.push(
@@ -1877,10 +2181,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             runSpacing: 10,
             children: [
               FilledButton.icon(
-                onPressed: () => _openOrders(
-                  auth,
-                  initialOrderId: primarySupportOrderId,
-                ),
+                onPressed: () =>
+                    _openOrders(auth, initialOrderId: primarySupportOrderId),
                 icon: const Icon(Icons.receipt_long_outlined),
                 label: Text(
                   primarySupportOrderId == null
@@ -2032,8 +2334,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             label: 'My Orders',
             description: unreadSupportCount > 0
                 ? primarySupportOrderId != null && unreadSupportCount == 1
-                    ? '1 new support update on Order #$primarySupportOrderId'
-                    : '$unreadSupportCount new support update${unreadSupportCount == 1 ? '' : 's'}'
+                      ? '1 new support update on Order #$primarySupportOrderId'
+                      : '$unreadSupportCount new support update${unreadSupportCount == 1 ? '' : 's'}'
                 : null,
             badgeLabel: unreadSupportCount > 0 ? '$unreadSupportCount' : null,
             badgeBackground: const Color(0xFFFFF0E8),
@@ -2105,6 +2407,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     final screenWidth = MediaQuery.sizeOf(context).width;
     final useWebLayout = kIsWeb && screenWidth >= 980;
     final compactLayout = screenWidth < 420;
+    final showSupportSection =
+        accountRole.isCustomer &&
+        (_supportNotifications.hasItems ||
+            _supportNotifications.hasActiveRequests ||
+            _loadingSupportNotifications ||
+            _hasSupportDraft ||
+            _loadingSupportDraft);
 
     if (user == null) {
       return const Scaffold(body: Center(child: Text('Not logged in')));
@@ -2117,6 +2426,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
         title: Text(
           'Profile',
           style: TextStyle(fontSize: compactLayout ? 22 : 28),
@@ -2135,32 +2445,136 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             padding: const EdgeInsets.all(14),
             child: Center(
               child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: useWebLayout ? 760 : 560),
-                child: Column(
-                  children: [
-                    _buildIdentityCard(user, auth),
-                    const SizedBox(height: 14),
-                    _buildAddressCard(auth),
-                    const SizedBox(height: 14),
-                    _buildSecurityCard(auth, user),
-                    const SizedBox(height: 14),
-                    _buildNotificationsCard(auth),
-                    if (accountRole.isCustomer &&
-                        (_supportNotifications.hasItems ||
-                            _supportNotifications.hasActiveRequests ||
-                            _loadingSupportNotifications ||
-                            _hasSupportDraft ||
-                            _loadingSupportDraft)) ...[
-                      const SizedBox(height: 14),
-                      _buildSupportUpdatesCard(auth),
-                    ],
-                    const SizedBox(height: 14),
-                    _buildActionsCard(auth),
-                  ],
+                constraints: BoxConstraints(
+                  maxWidth: useWebLayout ? 1180 : 560,
                 ),
+                child: useWebLayout
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 7,
+                            child: Column(
+                              children: [
+                                _buildIdentityCard(user, auth),
+                                const SizedBox(height: 14),
+                                _buildAccountSnapshotCard(user, auth),
+                                const SizedBox(height: 14),
+                                _buildAddressCard(auth),
+                                if (showSupportSection) ...[
+                                  const SizedBox(height: 14),
+                                  _buildSupportUpdatesCard(auth),
+                                ],
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 18),
+                          Expanded(
+                            flex: 5,
+                            child: Column(
+                              children: [
+                                _buildSecurityCard(auth, user),
+                                const SizedBox(height: 14),
+                                _buildNotificationsCard(auth),
+                                const SizedBox(height: 14),
+                                _buildActionsCard(auth),
+                              ],
+                            ),
+                          ),
+                        ],
+                      )
+                    : Column(
+                        children: [
+                          _buildIdentityCard(user, auth),
+                          const SizedBox(height: 14),
+                          _buildAccountSnapshotCard(user, auth),
+                          const SizedBox(height: 14),
+                          _buildAddressCard(auth),
+                          const SizedBox(height: 14),
+                          _buildSecurityCard(auth, user),
+                          const SizedBox(height: 14),
+                          _buildNotificationsCard(auth),
+                          if (showSupportSection) ...[
+                            const SizedBox(height: 14),
+                            _buildSupportUpdatesCard(auth),
+                          ],
+                          const SizedBox(height: 14),
+                          _buildActionsCard(auth),
+                        ],
+                      ),
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SnapshotMetricTile extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+
+  const _SnapshotMetricTile({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 132),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF7FAF9),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFD8E4DD)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F4EF),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: Icon(icon, size: 18, color: const Color(0xFF0B6F58)),
+            ),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF5D6E67),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF15211D),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

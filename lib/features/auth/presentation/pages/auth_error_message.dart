@@ -16,7 +16,7 @@ String friendlyAuthErrorMessage(Object error) {
     return 'Invalid email or password.';
   }
   if (requiresEmailVerification(error)) {
-    return 'Please verify using the 6-digit code sent to your email.';
+    return 'Please verify using the code sent to your email.';
   }
   if (lower.contains('already registered') ||
       lower.contains('user already exists')) {
@@ -38,7 +38,7 @@ String friendlyAuthErrorMessage(Object error) {
       (lower.contains('otp') ||
           lower.contains('code') ||
           lower.contains('token'))) {
-    return 'Invalid or expired 6-digit verification code.';
+    return 'Invalid or expired verification code.';
   }
   if (normalized.isNotEmpty && normalized.length <= 120) {
     return normalized;

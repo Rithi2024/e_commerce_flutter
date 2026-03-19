@@ -1,6 +1,6 @@
 ﻿# Setup Guide
 
-This guide covers local setup for the `marketflow` Flutter app with Supabase.
+This guide covers local setup for the `MarketFlow` Flutter app with Supabase.
 
 ## 1. Prerequisites
 
@@ -42,20 +42,28 @@ Optional seed data:
 
 ## 4. Deploy Auth Email Edge Function
 
-The app uses `resend-email` for signup verification and optional promotional email.
+The app uses `resend-email` for signup verification, optional promotional email, and order confirmation email.
 
 ```bash
 supabase login
 supabase link --project-ref YOUR_PROJECT_REF
 supabase functions deploy resend-email
 supabase secrets set RESEND_API_KEY=YOUR_RESEND_API_KEY
-supabase secrets set RESEND_FROM_EMAIL="Marketflow <noreply@your-domain.com>"
-supabase secrets set APP_BRAND_NAME=Marketflow
+supabase secrets set RESEND_FROM_EMAIL="MarketFlow <noreply@your-domain.com>"
+supabase secrets set APP_BRAND_NAME=MarketFlow
 ```
 
 Source:
 
 - `supabase/functions/resend-email/index.ts`
+
+Optional automation (reads OS env vars first, then `.env`, and also forces email OTP length to `6`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-auth-email.ps1 -Token YOUR_SUPABASE_ACCESS_TOKEN -OtpLength 6
+```
+
+The helper can read `SUPABASE_PROJECT_REF`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and `APP_BRAND_NAME` from OS environment variables or `.env`.
 
 ## 5. Deploy PayWay Edge Function (Optional)
 
@@ -86,8 +94,9 @@ In Supabase dashboard:
 
 1. Authentication -> Providers -> Email
 2. Enable Confirm email
-3. Authentication -> Email Templates -> Confirm signup
-4. Use `{{ .Token }}` (not `{{ .ConfirmationURL }}`)
+3. Keep the email OTP length set to `6`
+4. Authentication -> Email Templates -> Confirm signup
+5. Use `{{ .Token }}` (not `{{ .ConfirmationURL }}`)
 
 Example template:
 
@@ -95,6 +104,12 @@ Example template:
 <h2>Confirm your signup</h2>
 <p>Enter this 6-digit code in the app:</p>
 <p><strong>{{ .Token }}</strong></p>
+```
+
+Standalone automation for hosted projects:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\set-supabase-email-otp-length.ps1 -Token YOUR_SUPABASE_ACCESS_TOKEN -OtpLength 6
 ```
 
 ## 7. Configure Local Runtime Values
@@ -121,6 +136,8 @@ Set required keys:
 Common optional keys:
 
 - `AUTH_EMAIL_FUNCTION_NAME`
+- `WEB_SESSION_TIMEOUT_ENABLED`
+- `WEB_SESSION_TIMEOUT_MINUTES`
 - `PAYWAY_FUNCTION_NAME`
 - `PAYWAY_CALLBACK_URL`
 - `PAYWAY_CURRENCY`

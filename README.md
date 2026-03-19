@@ -42,9 +42,17 @@ Optional seed data: `supabase/seed_fake_products.sql`.
 ```bash
 supabase functions deploy resend-email
 supabase secrets set RESEND_API_KEY=YOUR_RESEND_API_KEY
-supabase secrets set RESEND_FROM_EMAIL="Marketflow <noreply@your-domain.com>"
-supabase secrets set APP_BRAND_NAME=Marketflow
+supabase secrets set RESEND_FROM_EMAIL="MarketFlow <noreply@your-domain.com>"
+supabase secrets set APP_BRAND_NAME=MarketFlow
 ```
+
+Windows PowerShell helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-auth-email.ps1 -Token YOUR_SUPABASE_ACCESS_TOKEN -OtpLength 6
+```
+
+This helper deploys `resend-email`, sets the email secrets, and updates the hosted Supabase Auth email OTP length back to `6`. The function handles signup confirmation, promotional mail, and order confirmation email.
 
 Optional PayWay QR:
 
@@ -96,7 +104,7 @@ flutter run -d chrome --dart-define-from-file=.env
 
 ## Runtime Config Keys
 
-`.env.example` contains all supported keys. Keys are centrally listed in `scripts/env-keys.txt` and used by the helper scripts and Vercel build script.
+`.env.example` includes the supported runtime keys plus a few optional deploy-helper placeholders. Runtime keys are centrally listed in `scripts/env-keys.txt` and used by the helper scripts and Vercel build script.
 
 Required:
 
@@ -106,6 +114,8 @@ Required:
 Common optional:
 
 - `AUTH_EMAIL_FUNCTION_NAME` (default: `resend-email`)
+- `WEB_SESSION_TIMEOUT_ENABLED` (default: `true` on web)
+- `WEB_SESSION_TIMEOUT_MINUTES` (default: `30`)
 - `PAYWAY_FUNCTION_NAME` (default: `payway-qr`)
 - `PAYWAY_CALLBACK_URL`
 - `PAYWAY_CURRENCY` (default: `USD`)

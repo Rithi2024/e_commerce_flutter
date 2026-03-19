@@ -33,6 +33,10 @@ class FavoriteIconButton extends StatefulWidget {
   final String? tooltip;
   final double pressScale;
   final Duration animationDuration;
+  final EdgeInsetsGeometry? padding;
+  final BoxConstraints? constraints;
+  final VisualDensity? visualDensity;
+  final double? splashRadius;
 
   const FavoriteIconButton({
     super.key,
@@ -44,6 +48,10 @@ class FavoriteIconButton extends StatefulWidget {
     this.tooltip,
     this.pressScale = 0.88,
     this.animationDuration = const Duration(milliseconds: 110),
+    this.padding,
+    this.constraints,
+    this.visualDensity,
+    this.splashRadius,
   });
 
   @override
@@ -75,6 +83,10 @@ class _FavoriteIconButtonState extends State<FavoriteIconButton> {
         child: IconButton(
           onPressed: widget.onPressed,
           tooltip: widget.tooltip,
+          padding: widget.padding,
+          constraints: widget.constraints,
+          visualDensity: widget.visualDensity,
+          splashRadius: widget.splashRadius,
           icon: AnimatedSwitcher(
             duration: const Duration(milliseconds: 160),
             switchInCurve: Curves.easeOutBack,

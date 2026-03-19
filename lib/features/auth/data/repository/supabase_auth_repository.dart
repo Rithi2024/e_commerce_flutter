@@ -66,8 +66,6 @@ class SupabaseAuthRepository implements AuthRepository {
     final functionNames = <String>{
       AuthEmailConfig.functionName.trim(),
       'resend-email',
-      'auth-email',
-      'registration-email',
     }.where((name) => name.isNotEmpty);
 
     Object? lastNotFound;

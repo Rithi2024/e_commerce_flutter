@@ -156,7 +156,7 @@ class _AuthenticationScreenState extends State<AuthenticationScreen> {
         });
         await _openVerificationScreen(
           introMessage:
-              'Your account still needs email verification. Enter your 6-digit code below, or resend a new one.',
+              'Your account still needs email verification. Enter your verification code below, or resend a new one.',
         );
       } else {
         setState(() => error = friendlyAuthErrorMessage(e));

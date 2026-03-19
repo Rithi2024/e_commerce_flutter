@@ -53,6 +53,37 @@ class OrderManagementProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> sendOrderConfirmationEmail({
+    required String email,
+    required String userName,
+    required int orderId,
+    required double total,
+    required String status,
+    required List<CartItem> items,
+  }) async {
+    try {
+      await _useCases.sendOrderConfirmationEmail(
+        email: email,
+        userName: userName,
+        orderId: orderId,
+        total: total,
+        status: status,
+        items: items,
+      );
+      _logInfo(
+        action: 'send_order_confirmation_email',
+        metadata: {'orderId': orderId, 'email': email, 'itemCount': items.length},
+      );
+    } catch (error) {
+      _logError(
+        action: 'send_order_confirmation_email',
+        message: error.toString(),
+        metadata: {'orderId': orderId, 'email': email},
+      );
+      rethrow;
+    }
+  }
+
   Future<CheckoutPrefill> loadCheckoutPrefill() {
     return _useCases.loadCheckoutPrefill();
   }

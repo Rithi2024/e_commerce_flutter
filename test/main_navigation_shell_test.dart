@@ -421,6 +421,16 @@ class _FakeAuthRepository implements AuthRepository {
 
 class _FakeOrderRepository implements OrderRepository {
   @override
+  Future<void> sendOrderConfirmationEmail({
+    required String email,
+    required String userName,
+    required int orderId,
+    required double total,
+    required String status,
+    required List<CartItem> items,
+  }) async {}
+
+  @override
   Future<int> placeOrder({
     required String address,
     required String deliveryType,

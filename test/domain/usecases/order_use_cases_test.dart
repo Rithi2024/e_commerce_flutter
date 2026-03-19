@@ -7,6 +7,12 @@ import 'package:flutter_test/flutter_test.dart';
 class _FakeOrderRepository implements OrderRepository {
   String? placedAddress;
   String? savedAddressUserId;
+  String? confirmationEmail;
+  String? confirmationUserName;
+  int? confirmationOrderId;
+  double? confirmationTotal;
+  String? confirmationStatus;
+  List<CartItem> confirmationItems = const <CartItem>[];
   int createdOrderId = 7;
 
   @override
@@ -46,6 +52,23 @@ class _FakeOrderRepository implements OrderRepository {
     required String address,
   }) async {
     savedAddressUserId = userId;
+  }
+
+  @override
+  Future<void> sendOrderConfirmationEmail({
+    required String email,
+    required String userName,
+    required int orderId,
+    required double total,
+    required String status,
+    required List<CartItem> items,
+  }) async {
+    confirmationEmail = email;
+    confirmationUserName = userName;
+    confirmationOrderId = orderId;
+    confirmationTotal = total;
+    confirmationStatus = status;
+    confirmationItems = List<CartItem>.from(items);
   }
 
   @override
@@ -132,5 +155,39 @@ void main() {
       () => useCases.placeOrder(address: 'A', deliveryType: 'drop_off'),
       throwsA(isA<StateError>()),
     );
+  });
+
+  test('OrderUseCases delegates order confirmation emails', () async {
+    final repo = _FakeOrderRepository();
+    final useCases = OrderUseCases(repo);
+    final items = <CartItem>[
+      CartItem(
+        id: 'shoe-1_m_black',
+        productId: 'shoe-1',
+        name: 'Everyday Runner',
+        price: 52,
+        imageUrl: '',
+        qty: 2,
+        size: 'M',
+        color: 'Black',
+      ),
+    ];
+
+    await useCases.sendOrderConfirmationEmail(
+      email: 'customer@example.com',
+      userName: 'Market Flow',
+      orderId: 42,
+      total: 104,
+      status: 'order_received',
+      items: items,
+    );
+
+    expect(repo.confirmationEmail, 'customer@example.com');
+    expect(repo.confirmationUserName, 'Market Flow');
+    expect(repo.confirmationOrderId, 42);
+    expect(repo.confirmationTotal, 104);
+    expect(repo.confirmationStatus, 'order_received');
+    expect(repo.confirmationItems, hasLength(1));
+    expect(repo.confirmationItems.first.name, 'Everyday Runner');
   });
 }

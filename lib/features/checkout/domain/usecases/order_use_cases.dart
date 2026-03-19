@@ -31,6 +31,24 @@ class OrderUseCases {
     return createdOrderId;
   }
 
+  Future<void> sendOrderConfirmationEmail({
+    required String email,
+    required String userName,
+    required int orderId,
+    required double total,
+    required String status,
+    required List<CartItem> items,
+  }) {
+    return _repository.sendOrderConfirmationEmail(
+      email: email,
+      userName: userName,
+      orderId: orderId,
+      total: total,
+      status: status,
+      items: items,
+    );
+  }
+
   Future<List<Map<String, dynamic>>> loadOrders() {
     return _repository.loadOrders();
   }

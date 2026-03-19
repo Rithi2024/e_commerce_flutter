@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:marketflow/features/auth/presentation/bloc/authentication_provider.dart';
 import 'package:marketflow/config/routes/app_routes.dart';
 import 'package:marketflow/features/settings/presentation/bloc/app_settings_provider.dart';
 import 'package:marketflow/features/catalog/presentation/bloc/product_catalog_provider.dart';
 import 'package:marketflow/features/catalog/presentation/helpers/product_review_content.dart';
 import 'package:marketflow/features/catalog/presentation/helpers/product_share_content.dart';
+import 'package:marketflow/features/catalog/presentation/widgets/event_deal_chip.dart';
 import 'package:marketflow/features/wishlist/presentation/bloc/user_wishlist_provider.dart';
 import 'package:marketflow/core/network/supabase_data_proxy.dart';
 import 'package:flutter/material.dart';
@@ -55,6 +58,9 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
   int? _selectedReviewRating;
   bool _onlyMyReviews = false;
   SupabaseDataProxy? _dataProxy;
+  Map<String, dynamic>? _activeEvent;
+  Duration? _remainingEvent;
+  Timer? _eventTicker;
 
   @override
   void initState() {
@@ -71,8 +77,18 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       );
     });
     Future.microtask(() async {
-      await Future.wait([_loadVariantStock(), _loadRatingState()]);
+      await Future.wait([
+        _loadVariantStock(),
+        _loadRatingState(),
+        _loadActiveEventContext(),
+      ]);
     });
+  }
+
+  @override
+  void dispose() {
+    _eventTicker?.cancel();
+    super.dispose();
   }
 
   String _variantKey(String s, String c) => '$s::$c';
@@ -103,6 +119,162 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
 
   void _syncQuantityWithSelection() {
     quantity = quantity.clamp(1, _maxQty);
+  }
+
+  DateTime? _parseEventStart(dynamic raw) {
+    final text = (raw ?? '').toString().trim();
+    if (text.isEmpty) return null;
+    return DateTime.tryParse(text)?.toUtc();
+  }
+
+  DateTime? _parseEventExpiry(dynamic raw) {
+    final text = (raw ?? '').toString().trim();
+    if (text.isEmpty) return null;
+    return DateTime.tryParse(text)?.toUtc();
+  }
+
+  bool _eventFlag(dynamic value) {
+    if (value is bool) return value;
+    final text = (value ?? '').toString().trim().toLowerCase();
+    return text == 'true' || text == '1' || text == 't' || text == 'yes';
+  }
+
+  String _eventState(Map<String, dynamic>? event) {
+    if (event == null) return 'inactive';
+    final providedState = (event['event_state'] ?? '').toString().trim();
+    if (providedState.isNotEmpty) return providedState;
+
+    if (!_eventFlag(event['is_active'])) return 'inactive';
+    final now = DateTime.now().toUtc();
+    final startsAt = _parseEventStart(event['starts_at']) ?? now;
+    final expiresAt = _parseEventExpiry(event['expires_at']);
+    if (expiresAt == null || !expiresAt.isAfter(now)) return 'expired';
+    if (startsAt.isAfter(now)) return 'upcoming';
+    return 'active';
+  }
+
+  String _formatEventRemaining(Duration value) {
+    if (value.inDays > 0) {
+      final hours = value.inHours.remainder(24);
+      return '${value.inDays}d ${hours}h';
+    }
+    if (value.inHours > 0) {
+      return '${value.inHours}h ${value.inMinutes.remainder(60)}m';
+    }
+    final minutes = value.inMinutes;
+    if (minutes > 0) {
+      return '${minutes}m';
+    }
+    return '${value.inSeconds.clamp(0, 59)}s';
+  }
+
+  String? _eventTimingLabel() {
+    final event = _activeEvent;
+    final remaining = _remainingEvent;
+    if (event == null || remaining == null) return null;
+    switch (_eventState(event)) {
+      case 'upcoming':
+        return 'Starts in ${_formatEventRemaining(remaining)}';
+      case 'active':
+        return 'Ends in ${_formatEventRemaining(remaining)}';
+      default:
+        return null;
+    }
+  }
+
+  EventProductDiscount? _resolvedEventDiscountForProduct(
+    AppSettingsProvider settings,
+    Product product,
+  ) {
+    final activeEvent = _activeEvent;
+    if (activeEvent != null && _eventState(activeEvent) == 'active') {
+      final eventId = (activeEvent['id'] ?? '').toString().trim();
+      if (eventId.isNotEmpty) {
+        final mapped = settings.findEventDiscount(
+          eventId: eventId,
+          productId: product.id,
+        );
+        if (mapped != null && mapped.discountPercent > 0) {
+          return mapped;
+        }
+      }
+    }
+    return settings.activeDiscountForProduct(productId: product.id);
+  }
+
+  void _startEventTicker() {
+    _eventTicker?.cancel();
+    final event = _activeEvent;
+    if (event == null) {
+      _remainingEvent = null;
+      return;
+    }
+
+    final startsAt = _parseEventStart(event['starts_at']);
+    final expiresAt = _parseEventExpiry(event['expires_at']);
+    if (expiresAt == null) {
+      _remainingEvent = null;
+      return;
+    }
+
+    void tick() {
+      if (!mounted) return;
+      final now = DateTime.now().toUtc();
+      if (!expiresAt.isAfter(now)) {
+        _eventTicker?.cancel();
+        context.read<AppSettingsProvider>().setActiveEventId(null);
+        setState(() {
+          _activeEvent = null;
+          _remainingEvent = null;
+        });
+        return;
+      }
+
+      final isUpcoming = startsAt != null && startsAt.isAfter(now);
+      final nextState = isUpcoming ? 'upcoming' : 'active';
+      final remaining = isUpcoming
+          ? startsAt.difference(now)
+          : expiresAt.difference(now);
+      final eventId = (event['id'] ?? '').toString().trim();
+      context.read<AppSettingsProvider>().setActiveEventId(
+        nextState == 'active' ? eventId : null,
+      );
+      setState(() {
+        _remainingEvent = remaining;
+        _activeEvent = Map<String, dynamic>.from(event)
+          ..['event_state'] = nextState;
+      });
+    }
+
+    tick();
+    _eventTicker = Timer.periodic(const Duration(seconds: 1), (_) => tick());
+  }
+
+  Future<void> _loadActiveEventContext() async {
+    try {
+      final event = await context
+          .read<ProductCatalogProvider>()
+          .fetchActiveEvent();
+      if (!mounted) return;
+      final nextEvent = event == null ? null : Map<String, dynamic>.from(event);
+      final nextState = _eventState(nextEvent);
+      final eventId = (nextEvent?['id'] ?? '').toString().trim();
+      context.read<AppSettingsProvider>().setActiveEventId(
+        nextState == 'active' ? eventId : null,
+      );
+      setState(() {
+        _activeEvent = nextEvent;
+      });
+      _startEventTicker();
+    } catch (_) {
+      if (!mounted) return;
+      context.read<AppSettingsProvider>().setActiveEventId(null);
+      _eventTicker?.cancel();
+      setState(() {
+        _activeEvent = null;
+        _remainingEvent = null;
+      });
+    }
   }
 
   Future<void> _loadVariantStock() async {
@@ -450,9 +622,8 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     }
 
     final qtyToAdd = quantity.clamp(1, _maxQty);
-    final discountPercent = settings.discountPercentForProduct(
-      productId: product.id,
-    );
+    final eventDiscount = _resolvedEventDiscountForProduct(settings, product);
+    final discountPercent = eventDiscount?.discountPercent ?? 0;
     final discountedUsd = settings.applyDiscountUsd(
       product.price,
       discountPercent: discountPercent,
@@ -487,7 +658,9 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     final unitText = qtyToAdd > 1 ? 'items' : 'item';
     final goToCart = await showAddToCartChoice(
       context,
-      message: "Added $qtyToAdd $unitText ($size, $colorName) to cart",
+      message: eventDiscount == null
+          ? "Added $qtyToAdd $unitText ($size, $colorName) to cart"
+          : "Added $qtyToAdd $unitText ($size, $colorName) at ${eventDiscount.eventTitle} price",
     );
     if (!mounted || !goToCart) return;
     await Navigator.push(
@@ -506,6 +679,15 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       AppRoutes.catalogRoute(
         collection: collectionSlug,
         productKey: product.slug,
+      ),
+    );
+  }
+
+  Future<void> _openEventDealsCollection() async {
+    if (!mounted) return;
+    await Navigator.of(context).pushReplacementNamed(
+      AppRoutes.catalogRoute(
+        collection: CatalogCollectionFilter.eventDeals.slug,
       ),
     );
   }
@@ -564,9 +746,29 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     final isFavorite = context.watch<UserWishlistProvider>().isFav(p.id);
     final screenWidth = MediaQuery.sizeOf(context).width;
     final compactLayout = screenWidth < 420;
+    final eventDiscount = _resolvedEventDiscountForProduct(settings, p);
+    final discountPercent =
+        eventDiscount?.discountPercent ??
+        settings.discountPercentForProduct(productId: p.id);
     final selectedStock = _selectedStock;
-    final discountPercent = settings.discountPercentForProduct(productId: p.id);
+    final eventTimingLabel =
+        eventDiscount != null &&
+            (_activeEvent?['id'] ?? '').toString().trim() ==
+                eventDiscount.eventId
+        ? _eventTimingLabel()
+        : null;
     final hasDiscount = discountPercent > 0;
+    final savingsAmount = hasDiscount
+        ? p.price -
+              settings.applyDiscountUsd(
+                p.price,
+                discountPercent: discountPercent,
+              )
+        : 0.0;
+    final savingsLabel = settings.formatUsd(
+      savingsAmount,
+      overrideDiscountPercent: 0,
+    );
     final isBestSeller = productProvider.isBestSeller(p.id);
     final topBadgeLabel = hasDiscount
         ? '${discountPercent.toStringAsFixed(0)}% OFF'
@@ -585,10 +787,41 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
       productId: p.id,
       overrideDiscountPercent: discountPercent,
     );
-    final recommended = productProvider.visible
-        .where((item) => item.id != p.id)
-        .take(6)
-        .toList();
+    double eventDiscountPercentFor(Product product) {
+      if (eventDiscount == null) return 0;
+      for (final discount in settings.discountsForProduct(product.id)) {
+        if (discount.eventId == eventDiscount.eventId) {
+          return discount.discountPercent;
+        }
+      }
+      return 0;
+    }
+
+    final eventRecommendations = eventDiscount == null
+        ? <Product>[]
+        : productProvider.all.where((item) => item.id != p.id).where((item) {
+            return eventDiscountPercentFor(item) > 0;
+          }).toList();
+    eventRecommendations.sort((a, b) {
+      final aDiscount = eventDiscountPercentFor(a);
+      final bDiscount = eventDiscountPercentFor(b);
+      final discountCompare = bDiscount.compareTo(aDiscount);
+      if (discountCompare != 0) {
+        return discountCompare;
+      }
+      final aCreated = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bCreated = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bCreated.compareTo(aCreated);
+    });
+    final recommended =
+        (eventRecommendations.isNotEmpty
+                ? eventRecommendations
+                : productProvider.visible.where((item) => item.id != p.id))
+            .take(6)
+            .toList();
+    final recommendationTitle = eventDiscount != null && recommended.isNotEmpty
+        ? 'More ${eventDiscount.eventTitle} deals'
+        : 'You May Also Like';
     final writtenReviewCount = _ratingBreakdown.writtenReviewCount;
     final filteredReviewEntries = filterAndSortProductReviews(
       reviews: _reviewEntries,
@@ -814,6 +1047,28 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                           ),
                       ],
                     ),
+                    if (eventDiscount != null) ...[
+                      const SizedBox(height: 10),
+                      EventDealChip(
+                        eventTitle: eventDiscount.eventTitle,
+                        backgroundColor: const Color(0xFFE9F5F0),
+                        foregroundColor: const Color(0xFF173D36),
+                        borderColor: const Color(0xFFD6E6DF),
+                        fontSize: 12,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 7,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _EventDealSpotlight(
+                        eventTitle: eventDiscount.eventTitle,
+                        discountPercent: discountPercent,
+                        relatedDealCount: eventRecommendations.length,
+                        timingLabel: eventTimingLabel,
+                        onShopEventDeals: _openEventDealsCollection,
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     if (_loadingStock)
                       const Row(
@@ -1138,7 +1393,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
 
                     if (recommended.isNotEmpty) ...[
                       const SizedBox(height: 26),
-                      const _SectionTitle("You May Also Like"),
+                      _SectionTitle(recommendationTitle),
                       const SizedBox(height: 12),
                       SizedBox(
                         height: 220,
@@ -1181,6 +1436,14 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
               ? Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (eventDiscount != null) ...[
+                      _EventPricingNotice(
+                        eventTitle: eventDiscount.eventTitle,
+                        savingsLabel: savingsLabel,
+                        timingLabel: eventTimingLabel,
+                      ),
+                      const SizedBox(height: 10),
+                    ],
                     Container(
                       decoration: BoxDecoration(
                         color: const Color(0xFFF2F3F5),
@@ -1239,63 +1502,224 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                 )
               : Row(
                   children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF2F3F5),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          IconButton(
-                            onPressed: quantity > 1
-                                ? () => _changeQuantity(-1)
-                                : null,
-                            icon: const Icon(Icons.remove),
-                          ),
-                          Text(
-                            quantity.toString(),
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
+                          if (eventDiscount != null) ...[
+                            _EventPricingNotice(
+                              eventTitle: eventDiscount.eventTitle,
+                              savingsLabel: savingsLabel,
+                              timingLabel: eventTimingLabel,
                             ),
-                          ),
-                          IconButton(
-                            onPressed:
-                                !_selectedVariantOutOfStock &&
-                                    quantity < _maxQty
-                                ? () => _changeQuantity(1)
-                                : null,
-                            icon: const Icon(Icons.add),
+                            const SizedBox(height: 10),
+                          ],
+                          Row(
+                            children: [
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF2F3F5),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Row(
+                                  children: [
+                                    IconButton(
+                                      onPressed: quantity > 1
+                                          ? () => _changeQuantity(-1)
+                                          : null,
+                                      icon: const Icon(Icons.remove),
+                                    ),
+                                    Text(
+                                      quantity.toString(),
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      onPressed:
+                                          !_selectedVariantOutOfStock &&
+                                              quantity < _maxQty
+                                          ? () => _changeQuantity(1)
+                                          : null,
+                                      icon: const Icon(Icons.add),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: SizedBox(
+                                  height: 52,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _selectedVariantOutOfStock
+                                        ? null
+                                        : () => _addToCart(p),
+                                    icon: const Icon(
+                                      Icons.shopping_bag_outlined,
+                                    ),
+                                    label: Text(
+                                      _selectedVariantOutOfStock
+                                          ? "Out of Stock"
+                                          : "Add to Cart - $displayTotalPrice",
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF151515),
+                                      foregroundColor: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: SizedBox(
-                        height: 52,
-                        child: ElevatedButton.icon(
-                          onPressed: _selectedVariantOutOfStock
-                              ? null
-                              : () => _addToCart(p),
-                          icon: const Icon(Icons.shopping_bag_outlined),
-                          label: Text(
-                            _selectedVariantOutOfStock
-                                ? "Out of Stock"
-                                : "Add to Cart - $displayTotalPrice",
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF151515),
-                            foregroundColor: Colors.white,
-                          ),
-                        ),
                       ),
                     ),
                   ],
                 ),
         ),
+      ),
+    );
+  }
+}
+
+class _EventPricingNotice extends StatelessWidget {
+  final String eventTitle;
+  final String savingsLabel;
+  final String? timingLabel;
+
+  const _EventPricingNotice({
+    required this.eventTitle,
+    required this.savingsLabel,
+    this.timingLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF5F0),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFD2E8DF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$eventTitle pricing applied',
+            style: const TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF173D36),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'You save $savingsLabel today.',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF557168),
+            ),
+          ),
+          if ((timingLabel ?? '').trim().isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: const Color(0xFFD2E8DF)),
+              ),
+              child: Text(
+                timingLabel!,
+                style: const TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF1C4A40),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _EventDealSpotlight extends StatelessWidget {
+  final String eventTitle;
+  final double discountPercent;
+  final int relatedDealCount;
+  final String? timingLabel;
+  final VoidCallback onShopEventDeals;
+
+  const _EventDealSpotlight({
+    required this.eventTitle,
+    required this.discountPercent,
+    required this.relatedDealCount,
+    this.timingLabel,
+    required this.onShopEventDeals,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFD6E6DF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Included in $eventTitle',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF173D36),
+            ),
+          ),
+          if ((timingLabel ?? '').trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEAF5F0),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                timingLabel!,
+                style: const TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF1C4A40),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 6),
+          Text(
+            relatedDealCount > 0
+                ? 'Save ${discountPercent.toStringAsFixed(0)}% on this item and browse $relatedDealCount more deal${relatedDealCount == 1 ? '' : 's'} from the same event.'
+                : 'Save ${discountPercent.toStringAsFixed(0)}% on this item while the event is live.',
+            style: const TextStyle(height: 1.45, color: Color(0xFF64726D)),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: onShopEventDeals,
+            icon: const Icon(Icons.local_offer_outlined, size: 18),
+            label: const Text('Shop event deals'),
+          ),
+        ],
       ),
     );
   }
@@ -1802,6 +2226,9 @@ class _RecommendationCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final settings = context.watch<AppSettingsProvider>();
     final discount = settings.discountPercentForProduct(productId: product.id);
+    final eventDiscount = settings.activeDiscountForProduct(
+      productId: product.id,
+    );
     final priceLabel = settings.formatUsd(
       product.price,
       productId: product.id,
@@ -1837,6 +2264,21 @@ class _RecommendationCard extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
+            if (eventDiscount != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+                child: EventDealChip(
+                  eventTitle: eventDiscount.eventTitle,
+                  backgroundColor: const Color(0xFFE9F5F0),
+                  foregroundColor: const Color(0xFF173D36),
+                  borderColor: const Color(0xFFD6E6DF),
+                  fontSize: 10.5,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 5,
+                  ),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
               child: Text(

@@ -1,17 +1,24 @@
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:marketflow/core/auth/account_role.dart';
+import 'package:marketflow/config/web_session_config.dart';
 import 'package:marketflow/features/auth/domain/entities/user_profile_model.dart';
 import 'package:marketflow/features/auth/domain/usecases/auth_use_cases.dart';
 import 'package:marketflow/features/logging/domain/usecases/log_use_cases.dart';
-import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthenticationProvider extends ChangeNotifier {
   final AuthUseCases _useCases;
   final LogUseCases? _logUseCases;
+  final Duration _webSessionTimeout;
+  final Duration _webSessionActivityThrottle;
+  final bool _webSessionTimeoutEnabled;
   StreamSubscription<User?>? _authSub;
+  Timer? _webSessionTimer;
+  DateTime? _lastWebSessionActivityAt;
+  bool _webSessionTimeoutInProgress = false;
+  String? _pendingWebSessionNotice;
 
   User? user;
   String accountType = AccountRole.customerValue;
@@ -31,20 +38,32 @@ class AuthenticationProvider extends ChangeNotifier {
 
   bool get isStaff => accountRole.isStaff;
 
+  bool get tracksWebSessionActivity => _webSessionTimeoutEnabled;
+
   AuthenticationProvider({
     required AuthUseCases useCases,
     LogUseCases? logUseCases,
+    Duration? webSessionTimeout,
+    Duration webSessionActivityThrottle = const Duration(seconds: 5),
+    bool? enableWebSessionTimeoutOverride,
   }) : _useCases = useCases,
-       _logUseCases = logUseCases {
+       _logUseCases = logUseCases,
+       _webSessionTimeout = webSessionTimeout ?? WebSessionConfig.timeout,
+       _webSessionActivityThrottle = webSessionActivityThrottle,
+       _webSessionTimeoutEnabled =
+           enableWebSessionTimeoutOverride ??
+           (kIsWeb && WebSessionConfig.isEnabled) {
     user = _useCases.currentUser();
     if (user != null) {
       refreshAccountType(notify: false);
+      _startWebSessionTimeoutTracking();
     }
 
     _authSub = _useCases.onUserChanges().listen((updatedUser) async {
       user = updatedUser;
       if (user == null) {
         accountType = AccountRole.customerValue;
+        _stopWebSessionTimeoutTracking();
         notifyListeners();
         _logInfo(
           action: 'auth_state_changed',
@@ -52,6 +71,7 @@ class AuthenticationProvider extends ChangeNotifier {
         );
         return;
       }
+      _startWebSessionTimeoutTracking();
       await refreshAccountType(notify: false);
       notifyListeners();
       _logInfo(
@@ -59,6 +79,27 @@ class AuthenticationProvider extends ChangeNotifier {
         metadata: {'state': 'signed_in', 'userId': user?.id},
       );
     });
+  }
+
+  void recordWebSessionActivity({bool force = false}) {
+    if (!_webSessionTimeoutEnabled || user == null) {
+      return;
+    }
+    final now = DateTime.now();
+    if (!force &&
+        _lastWebSessionActivityAt != null &&
+        now.difference(_lastWebSessionActivityAt!) <
+            _webSessionActivityThrottle) {
+      return;
+    }
+    _lastWebSessionActivityAt = now;
+    _restartWebSessionTimeoutTimer();
+  }
+
+  String? takePendingWebSessionNotice() {
+    final notice = _pendingWebSessionNotice;
+    _pendingWebSessionNotice = null;
+    return notice;
   }
 
   Future<void> register({
@@ -85,6 +126,7 @@ class AuthenticationProvider extends ChangeNotifier {
       // If email confirmation is required, no auth session exists yet.
       // In that case, skip profile upsert and rely on OTP verification first.
       if (user != null) {
+        _startWebSessionTimeoutTracking();
         await _useCases.upsertProfile(
           name: normalizedName,
           phone: normalizedPhone,
@@ -127,6 +169,7 @@ class AuthenticationProvider extends ChangeNotifier {
   Future<void> login(String email, String password) async {
     try {
       user = await _useCases.login(email: email, password: password);
+      _startWebSessionTimeoutTracking();
       await refreshAccountType(notify: false);
       notifyListeners();
       _logInfo(action: 'login', metadata: {'email': email, 'userId': user?.id});
@@ -177,6 +220,7 @@ class AuthenticationProvider extends ChangeNotifier {
       await _useCases.verifySignupCode(email: cleanEmail, code: cleanCode);
       user = _useCases.currentUser();
       if (user != null) {
+        _startWebSessionTimeoutTracking();
         await refreshAccountType(notify: false);
       }
       notifyListeners();
@@ -318,14 +362,24 @@ class AuthenticationProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> logout() async {
+  Future<void> logout({
+    String reason = 'manual',
+    bool preserveTimeoutNotice = false,
+  }) async {
     try {
       final previousUserId = user?.id;
+      _stopWebSessionTimeoutTracking();
+      if (!preserveTimeoutNotice) {
+        _pendingWebSessionNotice = null;
+      }
       await _useCases.logout();
       user = null;
       accountType = AccountRole.customerValue;
       notifyListeners();
-      _logInfo(action: 'logout', metadata: {'userId': previousUserId});
+      _logInfo(
+        action: 'logout',
+        metadata: {'userId': previousUserId, 'reason': reason},
+      );
     } catch (error) {
       _logError(action: 'logout', message: error.toString());
       rethrow;
@@ -438,7 +492,63 @@ class AuthenticationProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _stopWebSessionTimeoutTracking();
     _authSub?.cancel();
     super.dispose();
+  }
+
+  void _startWebSessionTimeoutTracking() {
+    if (!_webSessionTimeoutEnabled || user == null) {
+      return;
+    }
+    _lastWebSessionActivityAt = DateTime.now();
+    _restartWebSessionTimeoutTimer();
+  }
+
+  void _stopWebSessionTimeoutTracking() {
+    _webSessionTimer?.cancel();
+    _webSessionTimer = null;
+    _lastWebSessionActivityAt = null;
+  }
+
+  void _restartWebSessionTimeoutTimer() {
+    _webSessionTimer?.cancel();
+    _webSessionTimer = Timer(_webSessionTimeout, _handleWebSessionTimeout);
+  }
+
+  Future<void> _handleWebSessionTimeout() async {
+    if (_webSessionTimeoutInProgress || !_webSessionTimeoutEnabled) {
+      return;
+    }
+    if (user == null) {
+      _stopWebSessionTimeoutTracking();
+      return;
+    }
+    _webSessionTimeoutInProgress = true;
+    final timeoutLabel = _formatWebSessionTimeout(_webSessionTimeout);
+    _pendingWebSessionNotice =
+        'Your web session timed out after $timeoutLabel of inactivity. Please sign in again.';
+    try {
+      _logWarning(
+        action: 'web_session_timeout',
+        message: 'Web session expired due to inactivity',
+        metadata: {
+          'userId': user?.id,
+          'timeoutSeconds': _webSessionTimeout.inSeconds,
+        },
+      );
+      await logout(reason: 'web_session_timeout', preserveTimeoutNotice: true);
+    } finally {
+      _webSessionTimeoutInProgress = false;
+    }
+  }
+
+  String _formatWebSessionTimeout(Duration duration) {
+    if (duration.inMinutes >= 1 && duration.inSeconds % 60 == 0) {
+      final minutes = duration.inMinutes;
+      return '$minutes minute${minutes == 1 ? '' : 's'}';
+    }
+    final seconds = duration.inSeconds;
+    return '$seconds second${seconds == 1 ? '' : 's'}';
   }
 }
